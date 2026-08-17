@@ -372,6 +372,23 @@ else
          "it can prompt for the claude CLI and block a real terminal run"
 fi
 
+# Both developer CLIs are prepared before the AgentTileCLI build. Codex follows
+# the same idempotent, official-installer shape as Claude, while intentionally
+# remaining part of this existing step rather than becoming a separate --only
+# target.
+if awk '/^install_agenttilecli\(\)/,/^}/' "$SCRIPT" | grep -qF 'ensure_codex_cli'; then
+    pass "AgentTileCLI setup also ensures the Codex CLI"
+else
+    fail "AgentTileCLI setup also ensures the Codex CLI" \
+         "install_agenttilecli never calls ensure_codex_cli"
+fi
+if awk '/^ensure_codex_cli\(\)/,/^}/' "$SCRIPT" | grep -qF 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'; then
+    pass "Codex uses the official standalone installer"
+else
+    fail "Codex uses the official standalone installer" \
+         "ensure_codex_cli is missing the official install command"
+fi
+
 # pacman/flatpak must never stop to ask either.
 if grep -qE 'pacman -S(yu)? .*--noconfirm' "$SCRIPT"; then
     pass "pacman runs with --noconfirm"
