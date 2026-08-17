@@ -118,21 +118,6 @@ WOTLK_REPO="pl0xuee/wow-wotlk-autoinstall"
 WOTLK_ASSET="WowWotlkAutoinstall-x86_64.AppImage"
 WOTLK_SUMS="SHA256SUMS"
 
-# livewire is a Tauri desktop wrap of a live GitHub-events telemetry board
-# (pushes, stars, forks, releases as they happen). Same shape as Stalker GAMMA
-# GUI: a GitHub-Releases AppImage with NO self-updater — the Tauri updater
-# isn't enabled, and the repo's own update flow rebuilds from a source clone,
-# which an AppImage install doesn't have — so re-running this script, via the
-# version stamp, is the update path. Two things the others pin here are read
-# off the release instead: the asset name is versioned
-# (livewire_x.y.z_amd64.AppImage), so there is no LIVEWIRE_ASSET constant, and
-# the release ships no signature or checksum asset, so the download is checked
-# against the per-asset sha256 the releases API reports for that name
-# (integrity, not a signature — the same caveat as GAMMA and LoreRim).
-LIVEWIRE_DIR="$HOME/.local/share/livewire"
-LIVEWIRE_APPIMAGE="$BIN_DIR/Livewire.AppImage"
-LIVEWIRE_REPO="pl0xuee/github-livewire"
-
 # Music AI Player is a Tauri music player for long coding sessions — SQLite
 # library, crossfade, shuffle, playlists, visualizer — filled from a yt-dlp
 # importer, a folder scan, or a local ACE-Step generator. Back to the
@@ -209,7 +194,7 @@ else
     BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; RESET=""
 fi
 STEP_N=0
-STEP_TOTAL=15    # preflight + 14 steps; recalculated below if --only is used
+STEP_TOTAL=13    # preflight + 12 steps; recalculated below if --only is used
 
 step() {
     STEP_N=$((STEP_N + 1))
@@ -366,7 +351,7 @@ Options:
   --only STEP     Run one step only:
                     packages | flatpak | agenttilecli | streamhub | consolevault
                     discripper | griddown | gammagui | lorerim | wotlk
-                    livewire | musicai | config
+                    musicai | config
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
   -h, --help      This message
 
@@ -393,7 +378,7 @@ while [[ $# -gt 0 ]]; do
         # Guard the arg count first: `shift 2` with only one argument left
         # returns non-zero, and set -e would then exit silently — no usage, no
         # error, nothing. `./install.sh --only` would just print nothing and fail.
-        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | livewire | musicai | config)"
+        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
         -h|--help)      usage; exit 0 ;;
@@ -403,8 +388,8 @@ done
 
 if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
-        packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|livewire|musicai|config) ;;
-        *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | livewire | musicai | config" ;;
+        packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config) ;;
+        *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config" ;;
     esac
 fi
 wanted() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
@@ -1937,162 +1922,7 @@ StartupWMClass=WowWotlk.Gui
 EOF
 }
 
-# ── 11. livewire (prebuilt AppImage) ──────────────────────────────────────────
-# A Tauri desktop wrap of a live GitHub-events telemetry board. Fetched from
-# GitHub Releases like the other Tauri apps, but with neither of their update
-# paths — no Tauri updater (so no .sig), and the repo's own update flow needs a
-# source clone an AppImage doesn't have — so the version stamp on re-run is the
-# update path, as with Stalker GAMMA GUI. Verified against the per-asset sha256
-# the releases API reports, the only checksum this release publishes anywhere
-# (see the note by LIVEWIRE_* above).
-install_livewire() {
-    step "livewire"
-
-    local stamp="$LIVEWIRE_DIR/.version"
-    local release tag url asset digest
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$LIVEWIRE_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The release ships a versioned name (livewire_x.y.z_amd64.AppImage), so
-    # match the Tauri suffix, as ConsoleVault does. The trailing `"` keeps the
-    # match off any sibling asset URL that continues past `.AppImage`, and the
-    # suffix itself keeps it off the raw livewire-linux-x86_64 binary asset.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no livewire _amd64.AppImage asset in release $tag."
-    # The digest lookup below matches by asset NAME, and the name is versioned —
-    # so it's read off the URL we just matched rather than pinned as a constant.
-    asset="${url##*/}"
-
-    # The releases API reports each asset's sha256 in a `digest` field — the only
-    # checksum this release publishes anywhere. Matched to the asset by NAME via
-    # a real JSON parse, not a blind grep: a second asset added to some future
-    # release must not be able to swap its digest in for the AppImage's.
-    digest="$(printf '%s' "$release" | LIVEWIRE_ASSET="$asset" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["LIVEWIRE_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null || true)"
-
-    if [[ -f "$LIVEWIRE_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "livewire $tag already installed (no self-updater — a re-run picks up new releases)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/livewire.desktop" || ! -f "$LIVEWIRE_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$LIVEWIRE_DIR"
-            [[ -f "$LIVEWIRE_DIR/icon.png" ]] || curl -fsSL -o "$LIVEWIRE_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$LIVEWIRE_REPO/main/assets/livewire.png" \
-                || warn "couldn't fetch the icon"
-            write_livewire_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "livewire.desktop"
-
-        report "livewire" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$LIVEWIRE_DIR" "$APPS_DIR"
-
-    info "Downloading livewire $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download never leaves a half-written AppImage where a runnable
-    # one used to be.
-    local tmp="$LIVEWIRE_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha256 against the digest in the release's API record"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$LIVEWIRE_APPIMAGE"
-        run curl -fsSL -o "$LIVEWIRE_DIR/icon.png" "https://raw.githubusercontent.com/$LIVEWIRE_REPO/main/assets/livewire.png"
-        run "write $APPS_DIR/livewire.desktop"
-        prune_competing_launchers "livewire.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as every other AppImage
-        # here: a binary off the internet about to run with your user's privileges.
-        # A mismatch means a corrupt or truncated download and we stop rather than
-        # chmod it.
-        verify_livewire "$tmp" "$digest" || { rm -f "$tmp"; die "livewire download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$LIVEWIRE_APPIMAGE"
-
-        curl -fsSL -o "$LIVEWIRE_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$LIVEWIRE_REPO/main/assets/livewire.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_livewire_desktop
-        prune_competing_launchers "livewire.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "livewire $tag installed to $LIVEWIRE_APPIMAGE"
-    report "livewire" "$tag (prebuilt AppImage) → $LIVEWIRE_APPIMAGE"
-}
-
-# Verify the AppImage against the sha256 digest the releases API reported for the
-# asset (the release ships no .sig or checksum file). Returns non-zero if the API
-# carried no digest or the hash doesn't match — "couldn't check" is treated as
-# "failed", never as "passed".
-verify_livewire() {
-    local file="$1" digest="$2"
-
-    [[ -n "$digest" ]] || { warn "no sha256 digest in the release's API record — cannot verify the download"; return 1; }
-
-    local actual
-    actual="$(sha256sum "$file" | awk '{print $1}')"
-
-    if [[ "$actual" == "$digest" ]]; then
-        ok "checksum verified (sha256, from the releases API)"
-        return 0
-    fi
-
-    warn "CHECKSUM MISMATCH — the download does not match the API's sha256 digest"
-    warn "  expected: $digest"
-    warn "  got:      $actual"
-    return 1
-}
-
-# Named livewire.desktop, not com.<app>.app.desktop like the others: the file
-# name must equal the window's Wayland app-id — KWin reports it as plain
-# "livewire" — or compositors show a generic icon for the running window. The
-# app's own installer documents exactly this constraint. StartupWMClass matches
-# the Tauri crate name for the same taskbar-grouping reason as GridDown's.
-write_livewire_desktop() {
-    cat > "$APPS_DIR/livewire.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=livewire
-Comment=Live telemetry board for GitHub's public event stream
-Exec=$LIVEWIRE_APPIMAGE
-Icon=$LIVEWIRE_DIR/icon.png
-Terminal=false
-Categories=Development;Network;
-StartupNotify=true
-StartupWMClass=livewire
-EOF
-}
-
-# ── 12. Music AI Player (prebuilt AppImage) ───────────────────────────────────
+# ── 11. Music AI Player (prebuilt AppImage) ───────────────────────────────────
 # A local music player for long coding sessions — SQLite library, crossfade,
 # shuffle, playlists, visualizer, tray and media keys. Same shape as ConsoleVault
 # and GridDown (Tauri, updater on, minisign-signed release), so the download is
@@ -2224,12 +2054,11 @@ verify_musicai() {
     return 1
 }
 
-# Named music-ai-player.desktop, not com.<app>.app.desktop like most of the
-# others, for livewire's reason: on Wayland the compositor matches a running
-# window to a .desktop by its app-id, which Tauri takes from the crate name
-# ("music-ai-player" here) — so a com.musicaiplayer.app.desktop would leave the
-# running window with a generic icon. StartupWMClass carries the same value for
-# X11's WM_CLASS match.
+# Named music-ai-player.desktop, not com.<app>.app.desktop like the others: on
+# Wayland the compositor matches a running window to a .desktop by its app-id,
+# which Tauri takes from the crate name ("music-ai-player" here) — so a
+# com.musicaiplayer.app.desktop would leave the running window with a generic
+# icon. StartupWMClass carries the same value for X11's WM_CLASS match.
 write_musicai_desktop() {
     cat > "$APPS_DIR/music-ai-player.desktop" <<EOF
 [Desktop Entry]
@@ -2245,7 +2074,7 @@ StartupWMClass=music-ai-player
 EOF
 }
 
-# ── 13. system config ─────────────────────────────────────────────────────────
+# ── 12. system config ─────────────────────────────────────────────────────────
 configure_system() {
     step "System config"
 
@@ -2874,7 +2703,6 @@ main() {
     wanted gammagui     && install_gammagui
     wanted lorerim      && install_lorerim
     wanted wotlk        && install_wotlk
-    wanted livewire     && install_livewire
     wanted musicai      && install_musicai
     wanted config       && configure_system
 
@@ -2917,7 +2745,6 @@ main() {
     printf '    %sStalkerGammaGui.AppImage%s  install, update and play S.T.A.L.K.E.R. GAMMA\n' "$BOLD" "$RESET"
     printf '    %sLorerimAutoinstall.AppImage%s  one-click LoreRim (Wabbajack) install\n' "$BOLD" "$RESET"
     printf '    %sWowWotlkAutoinstall.AppImage%s  one-click WoW 3.3.5a client install\n' "$BOLD" "$RESET"
-    printf '    %sLivewire.AppImage%s     live GitHub telemetry board (pushes, stars, releases)\n' "$BOLD" "$RESET"
     printf '    %sMusicAIPlayer.AppImage%s  music for long coding sessions (YouTube import, ACE-Step)\n' "$BOLD" "$RESET"
     printf '    %s(or find everything in the app menu)%s\n\n' "$DIM" "$RESET"
 }
