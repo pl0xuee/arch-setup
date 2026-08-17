@@ -610,6 +610,7 @@ install_agenttilecli() {
     step "AgentTileCLI"
 
     ensure_claude_cli
+    ensure_codex_cli
 
     local dir="$PROJECTS_DIR/agenttilecli"
     run mkdir -p "$PROJECTS_DIR"
@@ -780,6 +781,31 @@ ensure_claude_cli() {
     else
         warn "claude CLI install failed — AgentTileCLI's panes won't work until you run:"
         warn "    curl -fsSL https://claude.ai/install.sh | bash"
+    fi
+}
+
+# Keep Codex available alongside Claude.  It is not required to build
+# AgentTileCLI, but it is part of the developer-tool setup this script provides.
+ensure_codex_cli() {
+    if have codex; then
+        skip "Codex CLI already installed"
+        return
+    fi
+
+    info "Installing the Codex CLI..."
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        return
+    fi
+
+    if curl -fsSL https://chatgpt.com/codex/install.sh | sh; then
+        # Like Claude, Codex installs to ~/.local/bin. It is not on PATH yet this
+        # early in the run, so make the command available to the remaining steps.
+        export PATH="$BIN_DIR:$PATH"
+        ok "Codex CLI installed"
+    else
+        warn "Codex CLI install failed — install it later with:"
+        warn "    curl -fsSL https://chatgpt.com/codex/install.sh | sh"
     fi
 }
 
