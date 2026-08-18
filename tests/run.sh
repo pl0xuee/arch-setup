@@ -511,17 +511,41 @@ d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="GNOME"; DESKTOP_SESSIO
       detect_desktop; printf '%s' "$DESKTOP" )"
 check_eq "a desktop that is neither reports 'other'" "other" "$d"
 
-# ...and it must still report 'other' when plasmashell IS installed. This is the
-# normal state of a CachyOS box whose owner added GNOME or bare Hyprland and
-# logged into that: Plasma is still on disk, but configuring its panel and its
-# idle timers would be configuring a desktop nobody is looking at. The session
-# is the authority, which is why the fallback below it only runs when there is
-# no session at all. Note `have` is NOT stubbed here — plasmashell really is
-# installed on the box this suite runs on.
+# ...and it must still report 'other' when the markers for another desktop are
+# sitting on disk. This is the normal state of a CachyOS box whose owner added
+# GNOME or bare Hyprland and logged into that: Plasma is still installed, but
+# configuring its panel and its idle timers would be configuring a desktop
+# nobody is looking at. The session is the authority, which is why the
+# installed-package fallback only runs when there is no session at all.
+#
+# omarchy_installed is stubbed false because that is the scenario — a box
+# WITHOUT Omarchy — and the suite has to be able to describe it from a machine
+# that does have /usr/share/omarchy on it.
 for x in GNOME Hyprland XFCE; do
     d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="$x"; DESKTOP_SESSION=""; OMARCHY_PATH=""
-          HOME="$tmp/gnomehome"; detect_desktop; printf '%s' "$DESKTOP" )"
+          HOME="$tmp/gnomehome"; omarchy_installed() { return 1; }
+          detect_desktop; printf '%s' "$DESKTOP" )"
     check_eq "a $x session isn't called kde just because plasmashell is installed" "other" "$d"
+done
+
+# The converse of the Hyprland case: Omarchy IS a Hyprland session and sets
+# nothing more specific, so the session name alone cannot tell the two apart.
+# Both facts together can.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="Hyprland"; DESKTOP_SESSION=""; OMARCHY_PATH=""
+      omarchy_installed() { return 0; }
+      detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "Hyprland on a box that has Omarchy is omarchy" "omarchy" "$d"
+
+# And the bug this ordering exists to prevent: an Omarchy install is on the
+# disk, but the user is logged into something else. Installed markers must not
+# beat the session — otherwise every Omarchy-only step runs against a desktop
+# that is not on screen.
+for x in GNOME XFCE KDE; do
+    want=other; [[ "$x" == KDE ]] && want=kde
+    d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="$x"; DESKTOP_SESSION=""
+          OMARCHY_PATH=/usr/share/omarchy
+          detect_desktop; printf '%s' "$DESKTOP" )"
+    check_eq "a $x session beats an Omarchy install on disk" "$want" "$d"
 done
 
 # The converse, so the fix above can't be "solved" by never consulting the
@@ -529,6 +553,7 @@ done
 # installed-package fallback is all there is, and it must still find KDE.
 d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP=""; DESKTOP_SESSION=""; OMARCHY_PATH=""
       HOME="$tmp/gnomehome"; have() { [[ "$1" == plasmashell ]]; }
+      omarchy_installed() { return 1; }
       detect_desktop; printf '%s' "$DESKTOP" )"
 check_eq "no session env at all still detects kde from plasmashell" "kde" "$d"
 

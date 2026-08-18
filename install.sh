@@ -427,17 +427,37 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # They are still asked separately, because CachyOS-with-something-else and
 # Arch-with-the-CachyOS-repos-added are both real machines, and a single
 # "is this CachyOS?" flag would get one of them wrong.
+# Whether Omarchy is on this box at all — which is a different question from
+# whether it is what the user is looking at.
+#
+# Omarchy 4.x is packaged: it lives in /usr/share/omarchy and exports
+# OMARCHY_PATH from /etc/profile.d/omarchy.sh. Earlier releases were a git clone
+# under ~/.local/share/omarchy. The paths are checked as well as the env var,
+# because the env var only reaches us from a login shell inside the session —
+# not over SSH with a command, and not from a TTY.
+#
+# Its own function so the suite can stub it. A test can fake XDG_CURRENT_DESKTOP
+# and HOME, but it cannot make /usr/share/omarchy stop existing on the machine
+# running the tests, and "a CachyOS box with bare Hyprland on it" is a case that
+# has to be testable from an Omarchy box.
+omarchy_installed() {
+    [[ -n "${OMARCHY_PATH:-}" ]] \
+        || [[ -d /usr/share/omarchy ]] \
+        || [[ -d "$HOME/.local/share/omarchy" ]] \
+        || have omarchy-version
+}
+
 detect_desktop() {
     if [[ -n "$DESKTOP_FORCED" ]]; then
         DESKTOP="$DESKTOP_FORCED"
         return
     fi
 
-    # The running session wins when there is one: XDG_CURRENT_DESKTOP is set by
-    # the session itself, so it says what is actually on screen rather than what
-    # happens to be installed. Checked first so that a box carrying both — an
-    # Omarchy install layered onto CachyOS, say — is judged by the session the
-    # user is logged into, not by whichever marker got looked at first.
+    # The running session wins whenever there is one: XDG_CURRENT_DESKTOP is set
+    # by the session itself, so it says what is actually on screen rather than
+    # what happens to be installed. That matters on a box carrying both — an
+    # Omarchy install layered onto CachyOS, or the reverse — where the installed
+    # markers are all true at once and only the session distinguishes them.
     local session="${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}"
     session="${session,,}"
     if [[ "$session" == *kde* || "$session" == *plasma* ]]; then
@@ -445,34 +465,36 @@ detect_desktop() {
         return
     fi
 
-    # Omarchy 3.x is packaged: it lives in /usr/share/omarchy and exports
-    # OMARCHY_PATH from /etc/profile.d/omarchy.sh. Earlier releases were a git
-    # clone under ~/.local/share/omarchy. Check the paths as well as the env
-    # var, because the env var only reaches us from a login shell inside the
-    # session — not over SSH with a command, and not from a TTY.
-    if [[ -n "${OMARCHY_PATH:-}" ]] \
-       || [[ -d /usr/share/omarchy ]] \
-       || [[ -d "$HOME/.local/share/omarchy" ]] \
-       || have omarchy-version; then
-        DESKTOP=omarchy
-        return
-    fi
-
-    # A session that is set and is neither of the above is the answer, and the
-    # installed-package fallback below must not get to overrule it. A CachyOS
-    # box whose owner added GNOME or bare Hyprland and logged into THAT still
-    # has plasmashell sitting on disk; without this the fallback would call it
-    # kde and go configure a panel nobody is looking at.
     if [[ -n "${XDG_CURRENT_DESKTOP:-}${DESKTOP_SESSION:-}" ]]; then
+        # Omarchy IS a Hyprland session — it sets XDG_CURRENT_DESKTOP=Hyprland
+        # and nothing more specific — so the session name alone can't tell it
+        # apart from bare Hyprland. Both together can: Hyprland on a box that
+        # also has Omarchy installed is Omarchy.
+        if [[ "$session" == *hyprland* || "$session" == *omarchy* ]] && omarchy_installed; then
+            DESKTOP=omarchy
+            return
+        fi
+
+        # A session that is set and is none of the above is the answer, and the
+        # installed-package fallback below must not get to overrule it. A
+        # CachyOS box whose owner added GNOME and logged into THAT still has
+        # plasmashell sitting on disk; without this the fallback would call it
+        # kde and go configure a panel nobody is looking at. The same holds for
+        # a machine that has Omarchy installed but is running something else.
         DESKTOP=other
         return
     fi
 
     # No session environment at all — an SSH command, or a TTY — so there is
-    # nothing to go on but what's installed. plasmashell, NOT kwriteconfig6:
-    # the latter ships in kconfig, which rides in behind any single KDE
-    # application on any desktop (Omarchy's own package list includes kdenlive),
-    # and would call half the world KDE.
+    # nothing to go on but what's installed.
+    if omarchy_installed; then
+        DESKTOP=omarchy
+        return
+    fi
+
+    # plasmashell, NOT kwriteconfig6: the latter ships in kconfig, which rides
+    # in behind any single KDE application on any desktop (Omarchy's own package
+    # list includes kdenlive), and would call half the world KDE.
     if have plasmashell; then
         DESKTOP=kde
         return

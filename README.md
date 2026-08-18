@@ -33,9 +33,15 @@ will silently undo the changes.
 Two separate questions get asked at the start of the run, and both are printed
 before anything is installed:
 
-- **Which desktop?** — decided by the running session (`XDG_CURRENT_DESKTOP`)
-  first, then by Omarchy's install path (`/usr/share/omarchy`), then by whether
-  `plasmashell` is installed. Override it with `--desktop kde|omarchy|other`.
+- **Which desktop?** — the running session decides whenever there is one:
+  `XDG_CURRENT_DESKTOP` says what is on screen, where the installed markers are
+  all true at once on a box carrying both. A Hyprland session counts as Omarchy
+  only if Omarchy is also installed, since Omarchy sets nothing more specific
+  than `Hyprland`; any other session is `other`, however much of KDE or Omarchy
+  is sitting on the disk. Only with no session environment at all — an SSH
+  command, a TTY — does it fall back to what's installed: Omarchy's path
+  (`/usr/share/omarchy`), then `plasmashell`. Override it with
+  `--desktop kde|omarchy|other`.
 - **Are the CachyOS repos enabled?** — asked separately, via `pacman-conf`,
   because CachyOS-with-something-else and Arch-with-the-CachyOS-repos-added are
   both real machines. If they aren't, the signed `[cachyos]` repo is added so
