@@ -53,6 +53,24 @@ minisign                     # verifies ConsoleVault's + Music AI Player's signe
 yt-dlp                       # Music AI Player: YouTube import
 ffmpeg                       # Music AI Player: yt-dlp's audio extraction + ffprobe
 
+# ── Gaming: the 32-bit graphics driver ────────────────────────────────
+# The 32-bit Vulkan driver for AMD. Nothing else in this setup pulls it in:
+# cachyos-gaming-meta doesn't, and lib32-mesa is the 32-bit GL driver — the
+# Vulkan ICD is a separate package. It lives in multilib, which is on by default
+# on CachyOS and switched on by ensure_cachyos_repo() everywhere else.
+#
+# Without it, a 32-bit Windows game under Proton dies about three seconds in
+# with no error dialog at all: the game's own logs show a CPU probe and then an
+# empty gx.log, and DXVK's x86 build reports "Failed to create Vulkan instance"
+# — because the only ICD on the box (/usr/share/vulkan/icd.d/radeon_icd.json)
+# is the 64-bit one. The 64-bit half of the same Proton session enumerates the
+# GPU perfectly, which is what makes it look like the game, not the driver.
+#
+# WoW 3.3.5a is a 32-bit exe, and so is most of what runs against a private
+# server. CachyOS ships this driver as part of its own install, so the gap only
+# appears after moving to a plain-Arch box like Omarchy.
+lib32-vulkan-radeon          # 32-bit RADV — every 32-bit game under Proton needs it
+
 # ── General desktop ───────────────────────────────────────────────────
 # Arrived with the desktop-rice step and outlived it. Kept because it is useful
 # on any machine, not because anything here still needs it. Dropped with the
