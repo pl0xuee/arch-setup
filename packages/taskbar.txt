@@ -1,6 +1,9 @@
 # KDE taskbar (Icons-only Task Manager) pinned launchers, in order, left to right.
 # One .desktop entry per line. Blank lines and #-comments are ignored.
 #
+# KDE ONLY. The step that reads this is skipped anywhere else — Omarchy's bar is
+# Waybar, which has no pinned-launcher concept for these to become.
+#
 # Find an app's entry name with:
 #   grep -l 'Name=Whatever' /usr/share/applications/*.desktop ~/.local/share/applications/*.desktop
 #

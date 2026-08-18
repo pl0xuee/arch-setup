@@ -1,0 +1,10 @@
+# Packages that are only worth having on KDE Plasma.
+#
+# Installed ONLY when the desktop step detects KDE. On Omarchy (Hyprland) both
+# of these would drag a slice of KDE onto a box that has no use for it — kscreen
+# alone pulls in a chunk of Plasma to provide a display KCM nothing will open.
+
+kscreen                      # kscreen-doctor, and the display settings module
+# Qt reads WebP only through this plugin. Without it Plasma shows a black
+# desktop and no error for a WebP wallpaper.
+qt6-imageformats

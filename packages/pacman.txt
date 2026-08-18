@@ -1,10 +1,14 @@
-# Packages installed with pacman from the official Arch + CachyOS repos.
-# One package per line. Blank lines and #-comments are ignored.
-# Re-running is safe: pacman --needed skips anything already installed.
+# Repo packages that exist everywhere this script runs — CachyOS and plain Arch
+# (which is what Omarchy is), on any desktop. One package per line. Blank lines
+# and #-comments are ignored. Re-running is safe: pacman --needed skips anything
+# already installed.
+#
+# Anything that ISN'T available everywhere lives in a sibling list instead:
+#   pacman-cachyos.txt   only in the CachyOS repos
+#   pacman-kde.txt       only worth installing on KDE Plasma
+#   aur.txt              AUR substitutes, used when the CachyOS repos are absent
 
 # ── Apps ──────────────────────────────────────────────────────────────
-vesktop                      # Discord client
-brave-origin-bin             # Brave browser
 keepassxc                    # Password manager
 proton-vpn-gtk-app           # ProtonVPN client
 gnome-disk-utility           # Disk management GUI
@@ -13,13 +17,6 @@ lact                         # AMD GPU control (fan curves, undervolt)
 # explicitly — install remmina alone and you get no RDP plugin at all.
 remmina                      # Remote desktop client
 freerdp                      # Remmina's RDP plugin
-
-# ── Gaming ────────────────────────────────────────────────────────────
-protonup-qt                  # Manage Proton-GE / Wine-GE versions
-# These two are exactly what the "Install Gaming packages" button in
-# CachyOS Hello installs: Steam, Lutris, Proton, Wine, MangoHud, etc.
-cachyos-gaming-meta
-cachyos-gaming-applications
 
 # ── Package tooling ───────────────────────────────────────────────────
 # NOT on a stock CachyOS install — verified in a VM. The Flatpak step below
@@ -57,15 +54,12 @@ yt-dlp                       # Music AI Player: YouTube import
 ffmpeg                       # Music AI Player: yt-dlp's audio extraction + ffprobe
 
 # ── General desktop ───────────────────────────────────────────────────
-# These arrived with the desktop-rice step and outlived it. Kept because they
-# are useful on any machine, not because anything here still needs them.
-# Dropped with the rice: python-numpy, python-pillow and ttf-fira-mono, which
-# only ever existed to generate and render its wallpapers.
+# Arrived with the desktop-rice step and outlived it. Kept because it is useful
+# on any machine, not because anything here still needs it. Dropped with the
+# rice: python-numpy, python-pillow and ttf-fira-mono, which only ever existed
+# to generate and render its wallpapers. kscreen and qt6-imageformats came from
+# there too and moved to pacman-kde.txt — both are Plasma-only in practice.
 rsync
-kscreen                      # kscreen-doctor, and the display settings module
-# Qt reads WebP only through this plugin. Without it Plasma shows a black
-# desktop and no error for a WebP wallpaper — rice or no rice.
-qt6-imageformats
 
 # ── Optional extras ───────────────────────────────────────────────────
 # Currently on your machine but not in the list you gave me. Uncomment

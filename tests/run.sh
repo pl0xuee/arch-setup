@@ -234,16 +234,95 @@ if [[ ${#fp[@]} -gt 0 ]]; then
     fi
 fi
 
-# These three arrived with the desktop-rice step and were kept after it was
-# removed: rsync and kscreen are generally useful, and without qt6-imageformats
-# Qt cannot open WebP at all, which shows up as a black desktop and no error.
-for p in rsync kscreen qt6-imageformats; do
-    if printf '%s\n' "${real[@]}" | grep -qx "$p"; then
-        pass "pacman.txt installs $p"
+# rsync arrived with the desktop-rice step and was kept after it was removed.
+if printf '%s\n' "${real[@]}" | grep -qx rsync; then
+    pass "pacman.txt installs rsync"
+else
+    fail "pacman.txt installs rsync" "listed under General desktop"
+fi
+
+# kscreen and qt6-imageformats came from the rice too and now live in the
+# KDE-only list — both drag a slice of Plasma onto a box that has no use for it.
+# Assert they are in exactly one list, so a merge that "tidied" them back into
+# pacman.txt doesn't quietly reintroduce that on Omarchy.
+# Assert the file exists before reading it. Every check below it is a negative
+# ("this name is NOT in that list"), which an empty array satisfies — so without
+# this, a list file that was never committed makes the suite go green for
+# precisely the deployment it would break.
+for f in pacman-cachyos pacman-kde aur; do
+    if [[ -f "$REPO_ROOT/packages/$f.txt" ]]; then
+        pass "packages/$f.txt exists"
     else
-        fail "pacman.txt installs $p" "listed under General desktop"
+        fail "packages/$f.txt exists" "install.sh skips a missing list; the checks below would pass on nothing"
     fi
 done
+
+mapfile -t kde_pkgs < <(read_list "$REPO_ROOT/packages/pacman-kde.txt")
+for p in kscreen qt6-imageformats; do
+    if printf '%s\n' "${kde_pkgs[@]}" | grep -qx "$p"; then
+        pass "pacman-kde.txt installs $p"
+    else
+        fail "pacman-kde.txt installs $p" "the KDE-only list is where these belong"
+    fi
+    if printf '%s\n' "${real[@]}" | grep -qx "$p"; then
+        fail "$p is not also in pacman.txt" "it would be installed on Omarchy too"
+    else
+        pass "$p is not also in pacman.txt"
+    fi
+done
+
+# The whole point of the split: pacman.txt must be installable on plain Arch.
+# Anything cachyos-only left in it fails the ENTIRE pacman transaction there —
+# pacman is all-or-nothing on an unknown package name — and takes the run with
+# it under set -e, before a single other step has run.
+mapfile -t cachy_pkgs < <(read_list "$REPO_ROOT/packages/pacman-cachyos.txt")
+
+# Checked against the plain-Arch repos directly, NOT against the names that
+# happen to be in pacman-cachyos.txt. The realistic way this regresses is a
+# CachyOS-only package added to pacman.txt and never added to the other list,
+# and a cross-list comparison cannot see that at all.
+#
+# core/extra/multilib are Arch's own repos, present under those names on CachyOS
+# too (its optimised rebuilds live in separate cachyos-* repos), so this is a
+# real answer to "would plain Arch find this?" from either kind of box.
+if arch_only="$(pacman -Sl core extra multilib 2>/dev/null | awk '{print $2}' | sort -u)" \
+   && [[ -n "$arch_only" ]]; then
+    unavailable=()
+    for p in "${real[@]}"; do
+        grep -qxF "$p" <<<"$arch_only" || unavailable+=("$p")
+    done
+    if [[ ${#unavailable[@]} -eq 0 ]]; then
+        pass "every one of the ${#real[@]} pacman.txt packages exists in plain Arch's repos"
+    else
+        fail "every pacman.txt package exists in plain Arch's repos" \
+             "Omarchy could not install these, and pacman fails the whole transaction: ${unavailable[*]}"
+    fi
+else
+    printf '  %s·%s core/extra/multilib not all enabled — skipping the plain-Arch availability check\n' "$DIM" "$RESET"
+fi
+
+leaked=()
+for p in "${cachy_pkgs[@]}"; do
+    printf '%s\n' "${real[@]}" | grep -qx "$p" && leaked+=("$p")
+done
+if [[ ${#leaked[@]} -eq 0 ]]; then
+    pass "no CachyOS-only package leaked into pacman.txt (${#cachy_pkgs[@]} checked)"
+else
+    fail "no CachyOS-only package leaked into pacman.txt" \
+         "these would break the whole transaction on Arch: ${leaked[*]}"
+fi
+
+# The gaming metapackages must NOT be in the AUR list — nothing in the AUR
+# provides them. Names are not compared against pacman-cachyos.txt, because a
+# substitute is deliberately a DIFFERENT package (brave-bin stands in for
+# brave-origin-bin); what matters is only that each name really exists, since
+# yay fails the whole batch on one that doesn't.
+mapfile -t aur_pkgs < <(read_list "$REPO_ROOT/packages/aur.txt")
+if printf '%s\n' "${aur_pkgs[@]}" | grep -q '^cachyos-'; then
+    fail "aur.txt lists no cachyos-* package" "those exist only in the CachyOS repos"
+else
+    pass "aur.txt lists no cachyos-* package"
+fi
 
 # AgentTileCLI's own install.sh preflights every one of these with pkg-config
 # (rust as cargo) and refuses to build without them. None can be assumed on a
@@ -283,6 +362,267 @@ else
     fail "all packages resolve" "not found: ${missing[*]}"
 fi
 
+# The KDE-only list has to resolve too — it goes through the same pacman
+# transaction as pacman.txt on any Plasma box.
+missing=()
+for p in "${kde_pkgs[@]}"; do
+    pacman -Si "$p" >/dev/null 2>&1 || missing+=("$p")
+done
+if [[ ${#missing[@]} -eq 0 ]]; then
+    pass "all ${#kde_pkgs[@]} KDE-only packages found in enabled repos"
+else
+    fail "all KDE-only packages resolve" "not found: ${missing[*]}"
+fi
+
+# The cachyos list can only be checked where the CachyOS repos are actually
+# enabled — on plain Arch every name in it is expected to be missing, which is
+# the entire reason the list exists.
+if has_cachyos_repos; then
+    missing=()
+    for p in "${cachy_pkgs[@]}"; do
+        pacman -Si "$p" >/dev/null 2>&1 || missing+=("$p")
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        pass "all ${#cachy_pkgs[@]} CachyOS-only packages found in the CachyOS repos"
+    else
+        fail "all CachyOS-only packages resolve" "not found: ${missing[*]}"
+    fi
+
+    # And the converse: a package that resolves WITHOUT the CachyOS repos does
+    # not belong in this list — it would be needlessly withheld from Arch.
+    strays=()
+    for p in "${cachy_pkgs[@]}"; do
+        repo="$(pacman -Si "$p" 2>/dev/null | awk -F': ' '/^Repository/{print $2; exit}')"
+        [[ "$repo" == cachyos* ]] || strays+=("$p (in $repo)")
+    done
+    if [[ ${#strays[@]} -eq 0 ]]; then
+        pass "every package in pacman-cachyos.txt really is CachyOS-only"
+    else
+        fail "every package in pacman-cachyos.txt really is CachyOS-only" \
+             "these come from a repo Arch has too: ${strays[*]}"
+    fi
+else
+    printf '  %s·%s no CachyOS repos here — skipping the CachyOS-only package check\n' "$DIM" "$RESET"
+fi
+
+# The AUR names are the only thing standing between Omarchy and no browser, and
+# they are the likeliest of all these lists to rot: AUR packages get renamed and
+# deleted by their maintainers, with nothing in this repo to notice. yay fails
+# the whole batch on one bad name, so a rename takes all three down, not just
+# the renamed one.
+if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
+    aur_query=""
+    for p in "${aur_pkgs[@]}"; do aur_query+="&arg[]=$p"; done
+    aur_found="$(curl -fsS --max-time 15 "https://aur.archlinux.org/rpc/v5/info?${aur_query#&}" 2>/dev/null \
+                 | python -c 'import json,sys
+try:
+    print("\n".join(r["Name"] for r in json.load(sys.stdin).get("results", [])))
+except Exception:
+    pass' || true)"
+    if [[ -z "$aur_found" ]]; then
+        printf '  %s·%s AUR unreachable — skipping the AUR name check\n' "$DIM" "$RESET"
+    else
+        gone=()
+        for p in "${aur_pkgs[@]}"; do
+            grep -qxF "$p" <<<"$aur_found" || gone+=("$p")
+        done
+        if [[ ${#gone[@]} -eq 0 ]]; then
+            pass "all ${#aur_pkgs[@]} aur.txt names still exist in the AUR"
+        else
+            fail "all aur.txt names still exist in the AUR" \
+                 "yay fails the whole batch on these: ${gone[*]}"
+        fi
+    fi
+fi
+
+# ── desktop detection ─────────────────────────────────────────────────────────
+group "Desktop detection"
+
+# --desktop is the escape hatch when the guess is wrong, so it must actually
+# win over every marker on the box.
+for d in kde omarchy other; do
+    ( DESKTOP_FORCED="$d"; DESKTOP=""; detect_desktop; [[ "$DESKTOP" == "$d" ]] ) \
+        && pass "--desktop $d overrides detection" \
+        || fail "--desktop $d overrides detection"
+done
+
+out="$(bash "$SCRIPT" --desktop bogus 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && pass "--desktop rejects an unknown desktop" \
+                || fail "--desktop rejects an unknown desktop" "exit $rc"
+out="$(bash "$SCRIPT" --desktop 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && pass "--desktop with no argument is an error, not a silent exit" \
+                || fail "--desktop with no argument is an error" "exit $rc"
+
+# The session on screen beats whatever is installed: a box carrying both KDE and
+# Omarchy is judged by the session its owner is logged into.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="KDE"; detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "XDG_CURRENT_DESKTOP=KDE detects kde" "kde" "$d"
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="plasma"; detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "the session match is case-insensitive" "kde" "$d"
+
+# Omarchy 3.x exports OMARCHY_PATH; Hyprland sets XDG_CURRENT_DESKTOP=Hyprland,
+# which must NOT be mistaken for a Plasma session.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="Hyprland"; DESKTOP_SESSION="hyprland"
+      OMARCHY_PATH=/usr/share/omarchy; detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "OMARCHY_PATH under Hyprland detects omarchy" "omarchy" "$d"
+
+# Over SSH or from a TTY there is no session environment at all, so detection
+# falls back to the install path — the case that matters most, since that's how
+# this script is often run.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP=""; DESKTOP_SESSION=""; OMARCHY_PATH=""
+      HOME="$tmp/omahome"; mkdir -p "$HOME/.local/share/omarchy"; detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "an omarchy clone in HOME is found with no session env" "omarchy" "$d"
+
+# Neither KDE nor Omarchy: everything desktop-specific has to skip rather than
+# guess. plasmashell is the KDE fallback marker precisely so this holds.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="GNOME"; DESKTOP_SESSION=""; OMARCHY_PATH=""
+      HOME="$tmp/gnomehome"; mkdir -p "$HOME"
+      have() { [[ "$1" != plasmashell && "$1" != omarchy-version ]]; }
+      detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "a desktop that is neither reports 'other'" "other" "$d"
+
+# ...and it must still report 'other' when plasmashell IS installed. This is the
+# normal state of a CachyOS box whose owner added GNOME or bare Hyprland and
+# logged into that: Plasma is still on disk, but configuring its panel and its
+# idle timers would be configuring a desktop nobody is looking at. The session
+# is the authority, which is why the fallback below it only runs when there is
+# no session at all. Note `have` is NOT stubbed here — plasmashell really is
+# installed on the box this suite runs on.
+for x in GNOME Hyprland XFCE; do
+    d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP="$x"; DESKTOP_SESSION=""; OMARCHY_PATH=""
+          HOME="$tmp/gnomehome"; detect_desktop; printf '%s' "$DESKTOP" )"
+    check_eq "a $x session isn't called kde just because plasmashell is installed" "other" "$d"
+done
+
+# The converse, so the fix above can't be "solved" by never consulting the
+# installed packages: with NO session environment — an SSH command, a TTY — the
+# installed-package fallback is all there is, and it must still find KDE.
+d="$( DESKTOP_FORCED=""; DESKTOP=""; XDG_CURRENT_DESKTOP=""; DESKTOP_SESSION=""; OMARCHY_PATH=""
+      HOME="$tmp/gnomehome"; have() { [[ "$1" == plasmashell ]]; }
+      detect_desktop; printf '%s' "$DESKTOP" )"
+check_eq "no session env at all still detects kde from plasmashell" "kde" "$d"
+
+# kwriteconfig6 must NOT be what decides "this is KDE". It ships in kconfig,
+# which rides in behind any single KDE app — Omarchy's own package list has
+# kdenlive — and using it here would run the Plasma panel step on Hyprland.
+if awk '/^detect_desktop\(\)/,/^}/' "$SCRIPT" | sed 's/#.*//' | grep -q 'kwriteconfig6'; then
+    fail "detection doesn't key off kwriteconfig6" \
+         "kconfig arrives with any KDE app; this would call Omarchy 'kde'"
+else
+    pass "detection doesn't key off kwriteconfig6"
+fi
+
+# ── the KDE-only steps really are gated ───────────────────────────────────────
+group "KDE-only steps skip elsewhere"
+
+# Both of these write Plasma's own config files. Off KDE there is nothing there
+# to write — and, worse, configure_taskbar stops plasmashell, which on a box
+# without one is a pgrep that finds nothing and a config file it would create
+# from scratch for no reader.
+for fn in configure_powerdevil configure_taskbar; do
+    if awk "/^$fn\(\)/,/^}/" "$SCRIPT" | grep -q '\[\[ "\$DESKTOP" != kde \]\]'; then
+        pass "$fn returns early off KDE"
+    else
+        fail "$fn returns early off KDE" "it would write Plasma config on Omarchy"
+    fi
+done
+
+# The footgun this repo already guards install_packages against, now reachable
+# through the new skip paths: configure_system's value is configure_taskbar's,
+# and it is called as `wanted config && configure_system` — the command after
+# the final &&, which set -e does NOT exempt. A non-zero return there ends the
+# run with every step already done, just before the summary prints.
+for d in kde omarchy other; do
+    if ( set -e
+         DESKTOP="$d" DRY_RUN=1
+         have() { case "$1" in kwriteconfig6|kreadconfig6|plasmashell) return 1 ;;
+                               *) command -v "$1" >/dev/null 2>&1 ;; esac; }
+         wanted config && configure_system ) >/dev/null 2>&1; then
+        pass "configure_system returns 0 on $d"
+    else
+        fail "configure_system returns 0 on $d" \
+             "set -e would kill the run just before the summary"
+    fi
+done
+
+if ( set -e
+     DESKTOP=omarchy DRY_RUN=1 SKIP_UPGRADE=1
+     has_cachyos_repos() { return 1; }; aur_helper() { return 1; }
+     wanted packages && install_packages ) >/dev/null 2>&1; then
+    pass "install_packages returns 0 with no CachyOS repos and no AUR helper"
+else
+    fail "install_packages returns 0 with no CachyOS repos and no AUR helper" \
+         "set -e would kill the run before any other step"
+fi
+
+gate_home="$tmp/gatehome"; mkdir -p "$gate_home/.config"
+( HOME="$gate_home" DESKTOP=omarchy DRY_RUN=0 configure_powerdevil ) >/dev/null 2>&1
+if [[ -e "$gate_home/.config/powerdevilrc" ]]; then
+    fail "no powerdevilrc is written on Omarchy" "the file was created anyway"
+else
+    pass "no powerdevilrc is written on Omarchy"
+fi
+
+out="$( HOME="$gate_home" DESKTOP=omarchy DRY_RUN=1 configure_taskbar 2>&1 )"
+check_contains "the taskbar step says why it skipped" "no Plasma panel" "$out"
+
+# ── the Brave profile directory follows the Brave that's installed ────────────
+group "Brave profile directory"
+
+# brave-origin-bin (CachyOS) and brave-bin (AUR, what Omarchy would get) are
+# different builds with different profile directories. Writing the filter lists
+# and the KeePassXC manifest into the wrong one is silent: no error, no effect,
+# and the extension simply never reaches the database.
+d="$( have() { [[ "$1" == brave-origin ]]; }; brave_profile_dir )"
+check_eq "brave-origin installed -> Brave-Origin" "$HOME/.config/BraveSoftware/Brave-Origin" "$d"
+d="$( have() { [[ "$1" == brave ]]; }; brave_profile_dir )"
+check_eq "upstream brave installed -> Brave-Browser" "$HOME/.config/BraveSoftware/Brave-Browser" "$d"
+
+# Neither installed yet — this run may be about to install one. An existing
+# profile is the next best evidence; failing that, CachyOS's is the default.
+d="$( have() { false; }; HOME="$tmp/nobrave"; mkdir -p "$HOME/.config/BraveSoftware/Brave-Browser"; brave_profile_dir )"
+check_eq "no brave, but a Brave-Browser profile -> Brave-Browser" \
+    "$tmp/nobrave/.config/BraveSoftware/Brave-Browser" "$d"
+# With nothing installed and no profile yet, the repos decide: brave-origin-bin
+# exists only in the CachyOS repos, so without them upstream Brave is the only
+# Brave this machine could end up running.
+d="$( have() { false; }; has_cachyos_repos() { true; }
+      HOME="$tmp/nobrave2"; mkdir -p "$HOME"; brave_profile_dir )"
+check_eq "nothing to go on, CachyOS repos -> Brave-Origin" \
+    "$tmp/nobrave2/.config/BraveSoftware/Brave-Origin" "$d"
+d="$( have() { false; }; has_cachyos_repos() { false; }
+      HOME="$tmp/nobrave3"; mkdir -p "$HOME"; brave_profile_dir )"
+check_eq "nothing to go on, Arch repos only -> Brave-Browser" \
+    "$tmp/nobrave3/.config/BraveSoftware/Brave-Browser" "$d"
+
+# ── the KeePassXC step must not need KDE ──────────────────────────────────────
+group "INI writing without kwriteconfig6"
+
+# kwriteconfig6 ships in kconfig. KeePassXC is Qt, not KDE, and is exactly as
+# useful on Omarchy — but calling kwriteconfig6 there unguarded is exit 127,
+# which under set -e ends the whole run on the spot.
+ini="$tmp/kp/keepassxc.ini"; mkdir -p "$(dirname "$ini")"
+( have() { false; }; ini_set "$ini" Browser Enabled true )
+check_contains "creates the file and the group" "[Browser]" "$(cat "$ini" 2>/dev/null)"
+check_contains "writes the key"                 "Enabled=true" "$(cat "$ini" 2>/dev/null)"
+
+# Qt writes CamelCase keys and values containing % (percent-encoded paths).
+# configparser lowercases keys and interpolates % unless told not to — either
+# would corrupt a real keepassxc.ini rather than just failing.
+printf '[General]\nLastDir=%%2Fhome%%2Fme\n' > "$ini"
+( have() { false; }; ini_set "$ini" Browser Enabled true )
+kept="$(cat "$ini" 2>/dev/null)"
+check_contains "preserves an existing CamelCase key" "LastDir="        "$kept"
+check_contains "preserves a % in an existing value"  "%2Fhome%2Fme"    "$kept"
+check_contains "still adds the new group"            "Enabled=true"    "$kept"
+
+if awk '/^configure_keepassxc_browser\(\)/,/^}/' "$SCRIPT" | grep -qE '^\s*kwriteconfig6'; then
+    fail "the KeePassXC step calls kwriteconfig6 unguarded" \
+         "exit 127 on Omarchy, and set -e ends the run there"
+else
+    pass "the KeePassXC step never calls kwriteconfig6 unguarded"
+fi
+
 # ── taskbar list ──────────────────────────────────────────────────────────────
 group "Taskbar launcher list"
 
@@ -312,7 +652,9 @@ group "KDE power settings (powerdevil)"
 
 if have kwriteconfig6; then
     pd_home="$tmp/pdhome"; mkdir -p "$pd_home/.config"
-    ( HOME="$pd_home" DRY_RUN=0 configure_powerdevil ) >/dev/null 2>&1
+    # DESKTOP is set explicitly: the step is gated on it now, and the suite
+    # never runs preflight, so it would otherwise be empty and skip everything.
+    ( HOME="$pd_home" DESKTOP=kde DRY_RUN=0 configure_powerdevil ) >/dev/null 2>&1
     pd="$(cat "$pd_home/.config/powerdevilrc" 2>/dev/null || true)"
 
     # 0 is "do nothing". Any other value here means the machine suspends itself

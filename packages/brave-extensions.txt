@@ -10,6 +10,9 @@
 # stop you uninstalling them at all — a lock worth avoiding on your own machine.
 
 oboonakemofpalcgghocfoadofidjkkk   # KeePassXC-Browser
+# Installed everywhere, because the list is one enterprise-policy file and not
+# worth splitting per desktop. Off KDE this one simply finds no Plasma to talk
+# to and sits there inert — useless, but not harmful.
 cimiefiiaegbelhefglklhhakcgmhkai   # Plasma Integration (KDE media controls, etc.)
 gdkadbhiemijfpoochcieonikoaciapi   # BigTube — better YouTube theater mode
 mdlbikciddolbenfkgggdegphnhmnfcg   # New Netflix 1080p

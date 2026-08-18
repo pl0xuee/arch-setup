@@ -1,0 +1,21 @@
+# Packages that only exist in the CachyOS repos.
+#
+# Installed ONLY when those repos are enabled — checked with `pacman-conf
+# --repo-list`, not by trusting the distro name. Omarchy is plain Arch, where
+# `pacman -S cachyos-gaming-meta` fails the whole transaction and (under
+# set -e) takes the entire run down with it.
+#
+# Where an AUR substitute exists it lives in packages/aur.txt and is installed
+# instead. The two gaming metapackages have no substitute anywhere — they are
+# CachyOS's own bundles — so off CachyOS they are simply skipped, and the run
+# says so.
+
+brave-origin-bin             # Brave browser        (AUR substitute: brave-bin)
+vesktop                      # Discord client       (AUR substitute: vesktop-bin)
+protonup-qt                  # Manage Proton-GE / Wine-GE versions  (AUR: protonup-qt)
+
+# Exactly what the "Install Gaming packages" button in CachyOS Hello installs:
+# Steam, Lutris, Proton, Wine, MangoHud, etc. No equivalent off CachyOS —
+# install Steam and friends by hand there.
+cachyos-gaming-meta
+cachyos-gaming-applications

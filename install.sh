@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 #
-# Post-install setup for a fresh CachyOS box.
+# Post-install setup for a fresh CachyOS or Omarchy box.
 #
-# CachyOS ships a full desktop already, so this only installs the delta:
+# Both ship a full desktop already, so this only installs the delta:
 # the apps that aren't on the ISO, plus two programs of mine that aren't
 # packaged anywhere and have to be built or fetched from GitHub.
+#
+# The desktop is detected at the start of the run and the steps that only exist
+# on one of them are gated on it — see detect_desktop() and the README. Nothing
+# is ever skipped silently.
 #
 # Everything here is idempotent — re-run it any time.
 #
@@ -187,6 +191,18 @@ SKIP_UPGRADE=0
 DRY_RUN=0
 ONLY=""
 
+# Which desktop this box runs, filled in by detect_desktop() during preflight:
+#
+#   kde      Plasma — CachyOS's default, and what this script was written for
+#   omarchy  Omarchy (Arch + Hyprland). No Plasma panel, no powerdevil, and the
+#            CachyOS repos aren't there either
+#   other    anything else — the desktop-specific steps skip, the rest runs
+#
+# DESKTOP_FORCED is --desktop, for when the guess is wrong (or to test the other
+# path from this machine).
+DESKTOP=""
+DESKTOP_FORCED=""
+
 # ── output ────────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
     BOLD=$'\e[1m'; DIM=$'\e[2m'; RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; BLUE=$'\e[34m'; RESET=$'\e[0m'
@@ -319,11 +335,169 @@ box() {
 
 banner() {
     box "$BOLD$BLUE" \
-        "CachyOS post-install setup" \
+        "CachyOS / Omarchy post-install setup" \
         "everything that isn't on the ISO"
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# ── what are we running on ────────────────────────────────────────────────────
+#
+# Two questions, and they are NOT the same question:
+#
+#   detect_desktop()    which desktop is on screen — decides whether the Plasma
+#                       panel and powerdevil steps have anything to configure
+#   has_cachyos_repos() whether the CachyOS repos are enabled — decides which
+#                       packages can be installed at all
+#
+# Omarchy answers "hyprland" and "no" to those; CachyOS answers "kde" and "yes".
+# They are still asked separately, because CachyOS-with-something-else and
+# Arch-with-the-CachyOS-repos-added are both real machines, and a single
+# "is this CachyOS?" flag would get one of them wrong.
+detect_desktop() {
+    if [[ -n "$DESKTOP_FORCED" ]]; then
+        DESKTOP="$DESKTOP_FORCED"
+        return
+    fi
+
+    # The running session wins when there is one: XDG_CURRENT_DESKTOP is set by
+    # the session itself, so it says what is actually on screen rather than what
+    # happens to be installed. Checked first so that a box carrying both — an
+    # Omarchy install layered onto CachyOS, say — is judged by the session the
+    # user is logged into, not by whichever marker got looked at first.
+    local session="${XDG_CURRENT_DESKTOP:-}:${DESKTOP_SESSION:-}"
+    session="${session,,}"
+    if [[ "$session" == *kde* || "$session" == *plasma* ]]; then
+        DESKTOP=kde
+        return
+    fi
+
+    # Omarchy 3.x is packaged: it lives in /usr/share/omarchy and exports
+    # OMARCHY_PATH from /etc/profile.d/omarchy.sh. Earlier releases were a git
+    # clone under ~/.local/share/omarchy. Check the paths as well as the env
+    # var, because the env var only reaches us from a login shell inside the
+    # session — not over SSH with a command, and not from a TTY.
+    if [[ -n "${OMARCHY_PATH:-}" ]] \
+       || [[ -d /usr/share/omarchy ]] \
+       || [[ -d "$HOME/.local/share/omarchy" ]] \
+       || have omarchy-version; then
+        DESKTOP=omarchy
+        return
+    fi
+
+    # A session that is set and is neither of the above is the answer, and the
+    # installed-package fallback below must not get to overrule it. A CachyOS
+    # box whose owner added GNOME or bare Hyprland and logged into THAT still
+    # has plasmashell sitting on disk; without this the fallback would call it
+    # kde and go configure a panel nobody is looking at.
+    if [[ -n "${XDG_CURRENT_DESKTOP:-}${DESKTOP_SESSION:-}" ]]; then
+        DESKTOP=other
+        return
+    fi
+
+    # No session environment at all — an SSH command, or a TTY — so there is
+    # nothing to go on but what's installed. plasmashell, NOT kwriteconfig6:
+    # the latter ships in kconfig, which rides in behind any single KDE
+    # application on any desktop (Omarchy's own package list includes kdenlive),
+    # and would call half the world KDE.
+    if have plasmashell; then
+        DESKTOP=kde
+        return
+    fi
+
+    DESKTOP=other
+}
+
+# For messages. Kept separate from $DESKTOP so the value stays a bare word that
+# is safe to compare against.
+desktop_label() {
+    case "$DESKTOP" in
+        kde)     printf 'KDE Plasma' ;;
+        omarchy) printf 'Omarchy (Hyprland)' ;;
+        # Name what was found, so an unexpected 'other' is debuggable from the
+        # one line of output. Not when it was forced, though — there the session
+        # is exactly what the user chose to overrule, and printing it reads as a
+        # contradiction ("other (KDE)").
+        *)       if [[ -n "$DESKTOP_FORCED" ]]; then
+                     printf 'other'
+                 else
+                     printf 'other (%s)' "${XDG_CURRENT_DESKTOP:-unknown}"
+                 fi ;;
+    esac
+}
+
+# Whether the CachyOS repos are enabled. That — not the distro's name — is what
+# decides package availability, and it is worth being exact about: pacman fails
+# the WHOLE transaction on one unknown package, so a single cachyos-only name in
+# the list is the difference between "everything installed" and "nothing did,
+# and set -e killed the run before any of the other steps".
+CACHYOS_REPOS=""
+has_cachyos_repos() {
+    if [[ -z "$CACHYOS_REPOS" ]]; then
+        local repos=""
+        # pacman-conf resolves Includes and honours commented-out sections, so
+        # it is the right answer; the grep is only there for a pacman old enough
+        # not to ship it, where a section header in the file is the best we have.
+        if have pacman-conf; then
+            repos="$(pacman-conf --repo-list 2>/dev/null || true)"
+        else
+            repos="$(sed -n 's/^\[\([^]]*\)\].*/\1/p' /etc/pacman.conf 2>/dev/null || true)"
+        fi
+        if grep -q '^cachyos' <<<"$repos"; then CACHYOS_REPOS=1; else CACHYOS_REPOS=0; fi
+    fi
+    [[ "$CACHYOS_REPOS" == 1 ]]
+}
+
+# Whichever AUR helper is on PATH. Omarchy ships yay; paru is the other common
+# one. Empty means neither, which is a reason to skip the AUR list, never a
+# reason to fail — see packages/aur.txt.
+aur_helper() {
+    local h
+    for h in yay paru; do
+        have "$h" && { printf '%s' "$h"; return 0; }
+    done
+    return 1
+}
+
+# Set one key in one group of a Qt/KDE-style INI file, creating the file and the
+# group if they aren't there.
+#
+# kwriteconfig6 is the right tool and is used whenever it exists. It doesn't
+# always: it ships in kconfig, which is KDE Frameworks, and a machine that isn't
+# running Plasma has no reason to have it. The python fallback exists so a
+# setting that has nothing to do with KDE (KeePassXC's browser integration, say)
+# still lands there rather than taking the run down with a command-not-found.
+#
+# RawConfigParser, not ConfigParser: Qt writes values containing % — a
+# percent-encoded path, a format string — and ConfigParser would try to
+# interpolate them and raise. optionxform is overridden because the default
+# lowercases every key, and Qt's are CamelCase.
+ini_set() {
+    local file="$1" group="$2" key="$3" value="$4"
+
+    if have kwriteconfig6; then
+        kwriteconfig6 --file "$file" --group "$group" --key "$key" "$value"
+        return
+    fi
+
+    INI_FILE="$file" INI_GROUP="$group" INI_KEY="$key" INI_VALUE="$value" python - <<'INI'
+import configparser, os
+
+path = os.environ["INI_FILE"]
+
+cp = configparser.RawConfigParser(strict=False)
+cp.optionxform = str
+cp.read(path)
+
+group = os.environ["INI_GROUP"]
+if not cp.has_section(group):
+    cp.add_section(group)
+cp.set(group, os.environ["INI_KEY"], os.environ["INI_VALUE"])
+
+with open(path, "w") as f:
+    cp.write(f, space_around_delimiters=False)
+INI
+}
 
 # Collected as the run goes, printed as a report at the end. Steps record what
 # they actually did, not what they intended to do.
@@ -342,7 +516,7 @@ run() {
 
 usage() {
     cat <<EOF
-Post-install setup for a fresh CachyOS box.
+Post-install setup for a fresh CachyOS or Omarchy box.
 
 Usage: ./install.sh [options]
 
@@ -353,12 +527,22 @@ Options:
                     discripper | griddown | gammagui | lorerim | wotlk
                     musicai | config
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
+  --desktop D     Force the desktop instead of detecting it:
+                    kde | omarchy | other
   -h, --help      This message
 
 Steps:
   config          Enables the LACT daemon and puts ~/.local/bin on PATH. Both
                   are needed for a working setup, so they run by default —
                   there is nothing to do by hand after this script.
+
+Desktops:
+  The desktop is detected, and the steps that only exist on one of them are
+  gated on it. On KDE Plasma everything runs. On Omarchy (Arch + Hyprland)
+  the Plasma panel and powerdevil steps are skipped — there is no panel to pin
+  to and powerdevil is not what handles idle there — and the packages that
+  only exist in the CachyOS repos are substituted from the AUR where a
+  substitute exists. Everything else is the same on both.
 
 Notes:
   A full system upgrade runs first by default. On Arch-based systems that
@@ -381,6 +565,11 @@ while [[ $# -gt 0 ]]; do
         --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
+        # Same arg-count guard as --only, for the same reason: `shift 2` with
+        # one argument left returns non-zero, and set -e would then exit with
+        # nothing printed at all.
+        --desktop)      [[ $# -ge 2 ]] || die "--desktop needs one of: kde | omarchy | other"
+                        DESKTOP_FORCED="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *)              die "unknown option: $1 (try --help)" ;;
     esac
@@ -390,6 +579,12 @@ if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
         packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config) ;;
         *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config" ;;
+    esac
+fi
+if [[ -n "$DESKTOP_FORCED" ]]; then
+    case "$DESKTOP_FORCED" in
+        kde|omarchy|other) ;;
+        *) die "--desktop takes: kde | omarchy | other" ;;
     esac
 fi
 wanted() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
@@ -422,6 +617,23 @@ preflight() {
     curl -fsS --max-time 10 -o /dev/null https://archlinux.org 2>/dev/null \
         || die "no network (couldn't reach archlinux.org)."
     ok "root check, pacman, curl, sudo, package lists, network"
+
+    # Everything after this point asks "which desktop?" and "which repos?", so
+    # settle both here — once, out loud, before the first thing is installed.
+    # A run that quietly skipped the panel step because it guessed Omarchy on a
+    # Plasma box would be a mystery; this line is what makes it not one.
+    detect_desktop
+    local repos
+    if has_cachyos_repos; then repos="CachyOS repos"; else repos="Arch repos only"; fi
+    if [[ -n "$DESKTOP_FORCED" ]]; then
+        ok "desktop: $(desktop_label) (forced with --desktop) · $repos"
+    else
+        ok "desktop: $(desktop_label) · $repos"
+    fi
+    report "Detected" "$(desktop_label), $repos"
+    if [[ "$DESKTOP" != kde ]]; then
+        info "The Plasma panel and powerdevil steps will be skipped — nothing here to configure."
+    fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
         skip "dry run — no sudo needed, nothing will be changed"
@@ -473,8 +685,41 @@ install_packages() {
         run sudo pacman -Syu --noconfirm
     fi
 
-    local pkgs=()
+    local pkgs=() extra=()
     mapfile -t pkgs < <(read_list "$PKG_DIR/pacman.txt")
+
+    # The conditional lists. Both are additive: everything in pacman.txt goes on
+    # every machine, and these only widen it. Skipping is a normal outcome and
+    # is said out loud, because "Steam never got installed" is otherwise a very
+    # quiet failure to notice three weeks later.
+    if [[ ! -f "$PKG_DIR/pacman-cachyos.txt" ]]; then
+        warn "missing $PKG_DIR/pacman-cachyos.txt — Brave, Vesktop and the gaming packages will NOT be installed"
+    else
+        mapfile -t extra < <(read_list "$PKG_DIR/pacman-cachyos.txt")
+        if [[ ${#extra[@]} -gt 0 ]]; then
+            if has_cachyos_repos; then
+                pkgs+=("${extra[@]}")
+            else
+                skip "no CachyOS repos — skipping ${#extra[@]} CachyOS-only packages"
+                report "Packages" "skipped (no CachyOS repos): ${extra[*]}"
+            fi
+        fi
+    fi
+
+    if [[ ! -f "$PKG_DIR/pacman-kde.txt" ]]; then
+        warn "missing $PKG_DIR/pacman-kde.txt — the Plasma-only packages will NOT be installed"
+    else
+        mapfile -t extra < <(read_list "$PKG_DIR/pacman-kde.txt")
+        if [[ ${#extra[@]} -gt 0 ]]; then
+            if [[ "$DESKTOP" == kde ]]; then
+                pkgs+=("${extra[@]}")
+            else
+                skip "not KDE — skipping ${#extra[@]} Plasma-only packages"
+                report "Packages" "skipped (not KDE): ${extra[*]}"
+            fi
+        fi
+    fi
+
     [[ ${#pkgs[@]} -gt 0 ]] || { skip "no packages listed"; return; }
 
     # --needed makes this a no-op for anything already present, so most of
@@ -483,7 +728,8 @@ install_packages() {
 
     if [[ $DRY_RUN -eq 1 ]]; then
         run sudo pacman -S --needed --noconfirm "${pkgs[@]}"
-        return
+        install_aur_substitutes
+        return 0
     fi
 
     # Diff the installed set around the transaction rather than parsing pacman's
@@ -516,6 +762,70 @@ install_packages() {
         if [[ ${#new_wanted[@]} -gt 0 ]]; then
             report "" "${new_wanted[*]}"
         fi
+    fi
+
+    install_aur_substitutes
+    return 0
+}
+
+# The three programs in pacman-cachyos.txt that DO exist off CachyOS, built from
+# the AUR instead. Only reached when the CachyOS repos are absent — on CachyOS
+# the repo builds are the same programs from a signed binary repo, which is
+# strictly better than compiling them here.
+#
+# Nothing in here is allowed to fail the run:
+#   no helper      skip with a warning. An AUR helper is a choice about how much
+#                  unreviewed build scripts you'll run on your machine, and a
+#                  post-install script has no business overruling it.
+#   a build fails  warn and carry on. Losing Brave is bad; losing the eight
+#                  steps after this one because Brave's build broke is worse.
+install_aur_substitutes() {
+    local list="$PKG_DIR/aur.txt"
+
+    # Only worth complaining about where it would have been used: on CachyOS the
+    # repo builds are installed instead and this file is never read at all.
+    has_cachyos_repos && return 0
+    if [[ ! -f "$list" ]]; then
+        warn "missing $list — no AUR substitutes for the CachyOS-only packages"
+        return 0
+    fi
+
+    local aur=()
+    mapfile -t aur < <(read_list "$list")
+    [[ ${#aur[@]} -gt 0 ]] || return 0
+
+    local helper
+    if ! helper="$(aur_helper)"; then
+        warn "no AUR helper (yay or paru) — skipping ${aur[*]}"
+        report "AUR" "SKIPPED (no yay/paru): ${aur[*]}"
+        return 0
+    fi
+
+    info "Installing ${#aur[@]} package(s) from the AUR with $helper..."
+
+    # Both helpers need telling not to stop on the review prompts they show by
+    # default — --noconfirm alone does NOT cover those, and the run would hang
+    # forever on "Diffs to show?" with nobody at the keyboard.
+    local args=(-S --needed --noconfirm)
+    case "$helper" in
+        yay)  args+=(--answerdiff=None --answerclean=None --answeredit=None --removemake) ;;
+        paru) args+=(--skipreview --removemake) ;;
+    esac
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "$helper" "${args[@]}" "${aur[@]}"
+        report "AUR" "would build ${aur[*]} with $helper"
+        return 0
+    fi
+
+    # NOT under sudo: both helpers refuse to run as root, and they call sudo
+    # themselves for the pacman half — which preflight has already cached.
+    if "$helper" "${args[@]}" "${aur[@]}"; then
+        ok "AUR packages installed (${aur[*]})"
+        report "AUR" "${aur[*]} built with $helper"
+    else
+        warn "$helper couldn't install one or more of: ${aur[*]} — install them by hand"
+        report "AUR" "FAILED (${aur[*]}) — install by hand"
     fi
     return 0
 }
@@ -2167,6 +2477,38 @@ EOF
     configure_brave_filters
 }
 
+# Which Brave profile directory to write into.
+#
+# CachyOS's brave-origin-bin is a different BUILD from upstream Brave, and the
+# two keep separate profiles: ~/.config/BraveSoftware/Brave-Origin against
+# .../Brave-Browser. Off CachyOS there is no brave-origin at all — Omarchy gets
+# upstream brave-bin from the AUR — so hardcoding Brave-Origin there means the
+# filter lists and the KeePassXC manifest are written to a directory the running
+# browser never opens. No error, no effect.
+#
+# The installed binary decides it, not whichever directory happens to exist: a
+# leftover profile from a browser that is no longer installed is not the answer.
+brave_profile_dir() {
+    local base="$HOME/.config/BraveSoftware"
+
+    if have brave-origin; then printf '%s/Brave-Origin'  "$base"; return; fi
+    if have brave;        then printf '%s/Brave-Browser' "$base"; return; fi
+
+    # Not installed yet. In a full run it will be by the time this is called —
+    # packages is step 1 and the config step is last — so this is really the
+    # `--only config` path on a box with no Brave at all. Go with whichever
+    # profile is already on disk, then with whichever Brave this machine could
+    # even install: brave-origin-bin exists only in the CachyOS repos, so
+    # without them upstream Brave is the only possible answer.
+    if [[ -d "$base/Brave-Origin"  ]]; then printf '%s/Brave-Origin'  "$base"; return; fi
+    if [[ -d "$base/Brave-Browser" ]]; then printf '%s/Brave-Browser' "$base"; return; fi
+    if has_cachyos_repos; then
+        printf '%s/Brave-Origin'  "$base"
+    else
+        printf '%s/Brave-Browser' "$base"
+    fi
+}
+
 # Switch on Brave's optional ad-block filter lists.
 #
 # There is no enterprise policy for these — they're stored per-profile in Brave's
@@ -2176,7 +2518,7 @@ EOF
 configure_brave_filters() {
     [[ ${#BRAVE_FILTER_LISTS[@]} -gt 0 ]] || return 0
 
-    local state_dir="$HOME/.config/BraveSoftware/Brave-Origin"
+    local state_dir; state_dir="$(brave_profile_dir)"
     local state="$state_dir/Local State"
 
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -2221,25 +2563,28 @@ PY
     fi
 }
 
-# Wire KeePassXC's browser integration up to Brave Origin.
+# Wire KeePassXC's browser integration up to whichever Brave is installed.
 #
 # KeePassXC's "Brave" checkbox writes its native-messaging manifest to
 # ~/.config/BraveSoftware/Brave-Browser/ — the path UPSTREAM Brave uses. Brave
 # Origin is a different build and reads ~/.config/BraveSoftware/Brave-Origin/,
-# so ticking that box achieves precisely nothing and the extension sits there
-# unable to reach the database. The manifest has to be placed by hand; this does
-# it, which is the whole reason this function exists.
+# so on CachyOS ticking that box achieves precisely nothing and the extension
+# sits there unable to reach the database. The manifest has to be placed by
+# hand; this does it, which is the whole reason this function exists. On a box
+# running upstream Brave (Omarchy, via brave-bin) it lands in Brave-Browser and
+# agrees with the checkbox — see brave_profile_dir().
 configure_keepassxc_browser() {
     have keepassxc-proxy || { skip "keepassxc not installed — skipping browser integration"; return; }
 
-    local nm_dir="$HOME/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts"
+    local profile; profile="$(brave_profile_dir)"
+    local nm_dir="$profile/NativeMessagingHosts"
     local manifest="$nm_dir/org.keepassxc.keepassxc_browser.json"
     local ini="$HOME/.config/keepassxc/keepassxc.ini"
 
     if [[ $DRY_RUN -eq 1 ]]; then
         run "write $manifest"
-        run "kwriteconfig6 --file $ini --group Browser --key Enabled true"
-        report "KeePassXC" "would wire browser integration to Brave Origin"
+        run "set Browser/Enabled=true in $ini"
+        report "KeePassXC" "would wire browser integration to ${profile##*/}"
         return
     fi
 
@@ -2264,11 +2609,19 @@ EOF
 
     # The manifest alone isn't enough — KeePassXC won't answer the proxy unless
     # browser integration is switched on in its own settings.
+    #
+    # kwriteconfig6 when it's there, a python fallback when it isn't. This is
+    # NOT a KDE-only step — KeePassXC is Qt, not KDE, and it is exactly as
+    # useful on Omarchy — but kwriteconfig6 ships in kconfig, which a Hyprland
+    # box has no reason to carry. Calling it unguarded there is not a skipped
+    # setting: it is exit 127, and set -e ends the entire run on the spot.
     mkdir -p "$(dirname "$ini")"
-    kwriteconfig6 --file "$ini" --group Browser --key Enabled true
+    if ! ini_set "$ini" Browser Enabled true; then
+        warn "couldn't enable browser integration in $ini — tick it by hand in KeePassXC's settings"
+    fi
 
-    ok "KeePassXC browser integration wired to Brave Origin"
-    report "KeePassXC" "browser integration enabled + Brave Origin manifest installed"
+    ok "KeePassXC browser integration wired to ${profile##*/}"
+    report "KeePassXC" "browser integration enabled + ${profile##*/} manifest installed"
     info "  You still need the KeePassXC-Browser extension in Brave itself."
 }
 
@@ -2371,6 +2724,19 @@ EOF
 configure_powerdevil() {
     local conf="$HOME/.config/powerdevilrc"
 
+    # powerdevil IS Plasma's power manager — there is no version of it running
+    # anywhere else, and powerdevilrc on a box without Plasma is a file nothing
+    # will ever read. Gated on the desktop rather than on `have kwriteconfig6`,
+    # which passes on any machine carrying a single KDE application.
+    if [[ "$DESKTOP" != kde ]]; then
+        skip "not KDE ($(desktop_label)) — powerdevil isn't what handles idle here"
+        report "Power (KDE)" "SKIPPED (not KDE — $(desktop_label))"
+        if [[ "$DESKTOP" == omarchy ]]; then
+            info "  Omarchy idles through hypridle — ~/.config/hypr/hypridle.conf, or Omarchy's own settings menu."
+        fi
+        return 0
+    fi
+
     if ! have kwriteconfig6; then
         warn "kwriteconfig6 not found — skipping the KDE power settings"
         report "Power (KDE)" "SKIPPED (kwriteconfig6 missing)"
@@ -2434,6 +2800,17 @@ configure_powerdevil() {
 configure_taskbar() {
     local conf="$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
     local list="$PKG_DIR/taskbar.txt"
+
+    # Everything below this line — pinned launchers, tray visibility, panel
+    # height, stopping and restarting plasmashell — is the Plasma panel and
+    # nothing else. Omarchy's bar is Waybar, which has no pinned-launcher
+    # concept at all: there is no equivalent to do instead, so the honest thing
+    # is to skip and say so.
+    if [[ "$DESKTOP" != kde ]]; then
+        skip "not KDE ($(desktop_label)) — no Plasma panel to pin launchers to"
+        report "Taskbar" "SKIPPED (not KDE — $(desktop_label))"
+        return 0
+    fi
 
     [[ -f "$list" ]] || { skip "no taskbar.txt — leaving the taskbar alone"; return; }
 

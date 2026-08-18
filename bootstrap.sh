@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# One-liner entry point. On a fresh CachyOS box:
+# One-liner entry point. On a fresh CachyOS or Omarchy box:
 #
 #   curl -fsSL https://raw.githubusercontent.com/pl0xuee/cachyos-setup/master/bootstrap.sh | bash
 #
@@ -17,6 +17,10 @@
 #   less install.sh
 #   ./install.sh --dry-run
 #   ./install.sh
+#
+# Any arguments are passed straight through, so the one-liner takes install.sh's
+# options too — `... | bash -s -- --dry-run`, or `--desktop omarchy` if the
+# desktop guess is wrong.
 #
 set -euo pipefail
 

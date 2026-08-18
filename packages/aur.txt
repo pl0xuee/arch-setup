@@ -1,0 +1,16 @@
+# AUR substitutes for packages/pacman-cachyos.txt.
+#
+# Used ONLY when the CachyOS repos are absent — that is, on plain Arch, which is
+# what Omarchy is. On CachyOS this file is skipped entirely, because the repo
+# builds in pacman-cachyos.txt are the same programs from a signed binary repo,
+# which is strictly better than building them here.
+#
+# Installed with whichever AUR helper is on PATH (yay or paru — Omarchy ships
+# yay). If neither is there the step is skipped with a warning; it never fails
+# the run, because everything in here is a nice-to-have next to the repo
+# packages, and an AUR build is not something to force on a machine whose owner
+# chose not to have a helper.
+
+brave-bin                    # Brave browser — upstream build (see the profile-dir note in install.sh)
+vesktop-bin                  # Discord client
+protonup-qt                  # Manage Proton-GE / Wine-GE versions
