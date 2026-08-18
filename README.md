@@ -1,13 +1,14 @@
-# CachyOS post-install setup
+# Arch post-install setup
 
-Runs on **CachyOS (KDE Plasma)** and on **Omarchy (Arch + Hyprland)**. The
-desktop is detected, and the steps that only exist on one of them are skipped on
-the other — see [Two desktops](#two-desktops).
+Runs on **CachyOS (KDE Plasma)** and on **Omarchy (Arch + Hyprland)** — two
+Arch-based boxes with very different desktops. The desktop is detected, and the
+steps that only exist on one of them are skipped on the other — see
+[Two desktops](#two-desktops).
 
 On a fresh box, log into the desktop once, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pl0xuee/cachyos-setup/master/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/pl0xuee/arch-setup/master/bootstrap.sh | bash
 ```
 
 Safe to re-run — a second run is a no-op.
@@ -15,8 +16,9 @@ Safe to re-run — a second run is a no-op.
 ```bash
 ./install.sh --dry-run             # show what it would do, change nothing
 ./install.sh --only config         # just the desktop/Brave config
+./install.sh --only omarchy        # just the Omarchy bar, theme and Hyprland rules
 ./install.sh --desktop omarchy     # force the desktop instead of detecting it
-./tests/run.sh                     # 288 tests, no VM needed
+./tests/run.sh                     # 300+ tests, no VM needed
 ```
 
 **On KDE, log in once before running it.** Plasma doesn't write its panel config
@@ -45,9 +47,10 @@ What that changes:
 |---|---|---|
 | Apps, AppImages, Flatpaks, PATH, LACT, power profile | ✅ | ✅ |
 | Brave policy, filter lists, KeePassXC integration | ✅ | ✅ |
-| Taskbar launchers, panel height, tray | ✅ | skipped — Waybar has no pinned launchers |
-| Powerdevil idle settings | ✅ | skipped — Omarchy idles through `hypridle` |
+| Taskbar launchers, panel height, tray | ✅ | skipped — omarchy-shell has no pinned launchers |
+| Powerdevil idle settings | ✅ | skipped — Omarchy idles through its own shell |
 | `kscreen`, `qt6-imageformats` | ✅ | skipped — Plasma-only |
+| Bar, theme, wallpaper, Hyprland rules, monitors | skipped — no omarchy-shell | ✅ — see [The Omarchy desktop](#the-omarchy-desktop) |
 | Everything in `packages/pacman-cachyos.txt` | ✅ | ✅ — the `[cachyos]` repo is added first (see below) |
 
 Nothing here fails the run. A skipped step says why, and the summary at the end
@@ -74,6 +77,52 @@ To undo it: delete the `[cachyos]` section from `/etc/pacman.conf`, then
 `sudo pacman -R cachyos-keyring cachyos-mirrorlist` and
 `sudo pacman-key --delete F3B607488DB35A47`.
 
+## The Omarchy desktop
+
+The `omarchy` step configures the Hyprland desktop the way the taskbar step
+configures Plasma's: skipped with a reason anywhere else, and idempotent piece
+by piece. What it sets:
+
+| | |
+|---|---|
+| **Shell text size** | `[font] base-size` in `~/.config/omarchy/shell.toml` — 16px against Omarchy's 12, and the bar's height scales from it. Written directly rather than through `omarchy display text size`, which would drag GTK's text scaling and every terminal font along with it. |
+| **Bar layout** | Clock format, plus Dropbox and hyprmoncfg in the right section. `shell.json` is edited, never overwritten, so widgets you drag around the bar afterwards survive a re-run. |
+| **One bar, one monitor** | Stock Omarchy puts a bar on every screen — `Variants { model: Quickshell.screens }`, with no option to narrow it. The patched clone reads `bar.monitors` from shell.json, so the bar lands on the ultrawide alone. A name that matches nothing falls back to every screen, so a box with different displays gets a bar rather than none. |
+| **Island bar** | `omarchy.bar` cloned to `<user>.bar` and patched: the panel surface goes transparent and each of the three sections paints its own rounded slab, so the bar reads as three islands instead of one edge-to-edge strip. |
+| **Tray drawer** | `omarchy.tray` cloned to `<user>.tray` and patched so the collapsed drawer stops holding width open for its hidden icons — otherwise the right island always carries a blank tail. |
+| **Theme and wallpaper** | The `solitude` theme, plus the wallpapers in `omarchy/backgrounds/solitude/`, one of them selected. |
+| **Hyprland** | Window rules (Steam tiles, StreamHub stays opaque), the session PATH fix that keeps `~/.local/bin` ahead of `/usr/bin`, flat mouse acceleration, and this machine's monitor layout. |
+| **Terminal** | foot's font size. |
+| **Agent** | Omarchy's default agent, so its first-update invitation never fires. |
+
+All of it is variables at the top of `install.sh` — theme, background, font
+sizes, clock format, the widget list, the plugin URLs.
+
+Your own `~/.config/hypr/*.lua` are never rewritten. The window rules live in a
+file this repo owns (`hypr/arch-setup.lua`), and hyprland.lua gets one `dofile`
+line pointing at it, added only if it isn't already there.
+
+### Patching Omarchy's own code
+
+The bar and the tray are Omarchy's, and `/usr/share/omarchy` is overwritten by
+`omarchy update`. So both are cloned into `~/.config/omarchy/plugins/` — what
+`omarchy plugin clone` is for — and the clone is patched with the diffs in
+`omarchy/patches/`.
+
+A patch that no longer applies is a **warning, never a failure**: Omarchy ships
+new shell code on its own schedule, and a bar that comes back stock is a far
+better outcome than a run that dies, or a half-patched QML file that stops the
+shell from starting at all. The sha256 of each upstream file the patches were
+made against is recorded in `install.sh`, so drift says so in the run log, and
+`./tests/run.sh` checks the patches still apply to the installed Omarchy — which
+is the earlier warning.
+
+One of them also carries a workaround for an upstream bug: a cloned `bar`-kind
+plugin cannot load at all, because `Bar.qml` declares required properties that
+the host's `source:`-based Loader can't set
+([#6915](https://github.com/basecamp/omarchy/issues/6915)). Without it, cloning
+the bar leaves you with no bar and no error.
+
 ## What goes where
 
 | File | |
@@ -84,4 +133,7 @@ To undo it: delete the `[cachyos]` section from `/etc/pacman.conf`, then
 | `packages/flatpak.txt` | Dropbox |
 | `packages/taskbar.txt` | pinned launchers, in order (KDE only) |
 | `packages/brave-extensions.txt` | extensions to auto-install |
-| `install.sh` | panel height, tray, homepage, power profile — as variables at the top |
+| `omarchy/patches/` | diffs applied to the cloned Omarchy bar and tray plugins |
+| `omarchy/hypr/` | window rules, input and monitor layout, installed into `~/.config/hypr/` |
+| `omarchy/backgrounds/<theme>/` | wallpapers installed into that theme's user folder |
+| `install.sh` | panel height, tray, homepage, power profile, every Omarchy setting — as variables at the top |

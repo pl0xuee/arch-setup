@@ -1901,6 +1901,215 @@ else
     printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
 fi
 
+# ── the Omarchy step ──────────────────────────────────────────────────────────
+group "Omarchy desktop step"
+
+# Same gate, same reason as the KDE-only steps: this one writes omarchy-shell's
+# config and clones its plugins, none of which exist anywhere else.
+if awk '/^configure_omarchy\(\)/,/^}/' "$SCRIPT" | grep -q '\[\[ "\$DESKTOP" != omarchy \]\]'; then
+    pass "configure_omarchy returns early off Omarchy"
+else
+    fail "configure_omarchy returns early off Omarchy" "it would write shell.json on KDE"
+fi
+
+# `wanted omarchy && configure_omarchy` puts this after the final && in main(),
+# where a non-zero return is NOT exempt from set -e — the footgun this suite
+# already guards install_packages and configure_system against.
+for d in kde omarchy other; do
+    om_home="$tmp/omhome-$d"; mkdir -p "$om_home"
+    if ( set -e
+         HOME="$om_home" DESKTOP="$d" DRY_RUN=1
+         wanted omarchy && configure_omarchy ) >/dev/null 2>&1; then
+        pass "configure_omarchy returns 0 on $d"
+    else
+        fail "configure_omarchy returns 0 on $d" \
+             "set -e would kill the run just before the summary"
+    fi
+done
+
+om_gate="$tmp/omgate"; mkdir -p "$om_gate/.config"
+( HOME="$om_gate" DESKTOP=kde DRY_RUN=0 configure_omarchy ) >/dev/null 2>&1
+if [[ -e "$om_gate/.config/omarchy" || -e "$om_gate/.config/hypr" ]]; then
+    fail "no Omarchy config is written on KDE" "the step wrote to a Plasma box's HOME"
+else
+    pass "no Omarchy config is written on KDE"
+fi
+
+out="$( HOME="$om_gate" DESKTOP=kde DRY_RUN=1 configure_omarchy 2>&1 )"
+check_contains "the Omarchy step says why it skipped" "not Omarchy" "$out"
+
+# ── shell.toml: the shell's own text size ─────────────────────────────────────
+#
+# This file is a hand-editable override that the user may already have other
+# sections in, so the upsert has to be surgical — the whole reason it mirrors
+# omarchy-display-text-size's awk instead of rewriting the file.
+sf_home="$tmp/sfhome"; mkdir -p "$sf_home/.config/omarchy"
+printf '[bar]\nsize-horizontal = 30\n\n[font]\nbase-size = 12\nbody = 13\n' \
+    > "$sf_home/.config/omarchy/shell.toml"
+( HOME="$sf_home" DESKTOP=omarchy DRY_RUN=0 OMARCHY_SHELL_FONT_PX=16 omarchy_shell_font ) >/dev/null 2>&1
+sf="$(cat "$sf_home/.config/omarchy/shell.toml" 2>/dev/null || true)"
+
+check_contains "base-size is updated in place"     "base-size = 16"    "$sf"
+check_contains "other [font] keys are left alone"  "body = 13"         "$sf"
+check_contains "other sections are left alone"     "size-horizontal = 30" "$sf"
+check_eq "base-size is written exactly once" "1" "$(grep -c 'base-size' <<<"$sf")"
+
+# ...and the file gets created when the machine has none.
+sf2_home="$tmp/sfhome2"; mkdir -p "$sf2_home"
+( HOME="$sf2_home" DESKTOP=omarchy DRY_RUN=0 OMARCHY_SHELL_FONT_PX=16 omarchy_shell_font ) >/dev/null 2>&1
+sf2="$(cat "$sf2_home/.config/omarchy/shell.toml" 2>/dev/null || true)"
+check_contains "a missing shell.toml is created with [font]" "[font]" "$sf2"
+check_contains "a missing shell.toml gets the size"          "base-size = 16" "$sf2"
+
+# A dry run must not create it at all.
+sf3_home="$tmp/sfhome3"; mkdir -p "$sf3_home"
+( HOME="$sf3_home" DESKTOP=omarchy DRY_RUN=1 OMARCHY_SHELL_FONT_PX=16 omarchy_shell_font ) >/dev/null 2>&1
+if [[ -e "$sf3_home/.config/omarchy/shell.toml" ]]; then
+    fail "a dry run writes no shell.toml" "the file was created anyway"
+else
+    pass "a dry run writes no shell.toml"
+fi
+
+# ── shell.json: the bar layout ────────────────────────────────────────────────
+#
+# Edited, never overwritten: dragging a widget along the bar writes this same
+# file, and a setup script that clobbers it would undo that on every run.
+bj_home="$tmp/bjhome"
+bj_user="${USER:-$(id -un)}"
+mkdir -p "$bj_home/.config/omarchy/plugins/$bj_user.bar" \
+         "$bj_home/.config/omarchy/plugins/$bj_user.tray"
+cat > "$bj_home/.config/omarchy/shell.json" <<'JSON'
+{
+  "version": 1,
+  "bar": {
+    "position": "top",
+    "layout": {
+      "left": [ { "id": "omarchy.menu" } ],
+      "center": [ { "id": "omarchy.clock", "format": "dddd HH:mm" } ],
+      "right": [ { "id": "omarchy.tray" }, { "id": "omarchy.power" } ]
+    }
+  }
+}
+JSON
+( HOME="$bj_home"; DESKTOP=omarchy; DRY_RUN=0
+  OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
+  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
+  OMARCHY_BAR_MONITORS=(DP-1)
+  omarchy_bar_layout ) >/dev/null 2>&1
+
+bj_read() { python -c "
+import json,sys
+d=json.load(open('$bj_home/.config/omarchy/shell.json'))
+r=[e['id'] for e in d['bar']['layout']['right']]
+c=[e for e in d['bar']['layout']['center'] if e['id']=='omarchy.clock']
+print(d['bar'].get('id',''))
+print(','.join(r))
+print(c[0]['format'] if c else '')
+" 2>/dev/null; }
+
+check_eq "bar.id points at the cloned bar"  "$bj_user.bar" "$(bj_read | sed -n 1p)"
+check_eq "the tray entry is swapped for the clone, in place" \
+         "$bj_user.tray,omarchy.dropbox,crmne.hyprmoncfg,omarchy.power" "$(bj_read | sed -n 2p)"
+check_eq "the clock format is applied" "ddd d MMM h:mm AP" "$(bj_read | sed -n 3p)"
+
+# The monitor list only means anything to the patched clone, but writing it is
+# harmless on a stock bar, which has no such key and ignores it.
+if grep -q '"DP-1"' "$bj_home/.config/omarchy/shell.json"; then
+    pass "the monitor list is written to shell.json"
+else
+    fail "the monitor list is written to shell.json" "the bar would appear on every screen"
+fi
+
+# Widgets the user has since moved must not be re-added, and a second run must
+# not stack a second copy of the extras next to the tray.
+bj_once="$(cat "$bj_home/.config/omarchy/shell.json")"
+( HOME="$bj_home"; DESKTOP=omarchy; DRY_RUN=0
+  OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
+  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
+  OMARCHY_BAR_MONITORS=(DP-1)
+  omarchy_bar_layout ) >/dev/null 2>&1
+check_eq "a second run changes nothing" "$bj_once" "$(cat "$bj_home/.config/omarchy/shell.json")"
+
+# Pointing shell.json at a plugin directory that isn't there is how you get a
+# desktop with no bar at all, so the id is only claimed when the clone exists.
+bj2_home="$tmp/bjhome2"; mkdir -p "$bj2_home/.config/omarchy"
+cp "$bj_home/.config/omarchy/shell.json" "$bj2_home/.config/omarchy/shell.json"
+python - "$bj2_home/.config/omarchy/shell.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["bar"].pop("id",None)
+json.dump(d,open(p,"w"),indent=2,sort_keys=True)
+PY
+( HOME="$bj2_home"; DESKTOP=omarchy; DRY_RUN=0
+  OMARCHY_CLOCK_FORMAT="x"; OMARCHY_CLOCK_FORMAT_VERTICAL="x"
+  OMARCHY_BAR_RIGHT_EXTRA=()
+  OMARCHY_BAR_MONITORS=()
+  omarchy_bar_layout ) >/dev/null 2>&1
+if grep -q '"id": "'"$bj_user"'.bar"' "$bj2_home/.config/omarchy/shell.json"; then
+    fail "no cloned bar id is written when the clone is missing" \
+         "shell.json points at a plugin that doesn't exist — that's a blank bar"
+else
+    pass "no cloned bar id is written when the clone is missing"
+fi
+
+# ── the QML patches ───────────────────────────────────────────────────────────
+for p in bar-islands tray-collapse; do
+    if [[ -f "$REPO_ROOT/omarchy/patches/$p.patch" ]]; then
+        pass "omarchy/patches/$p.patch is vendored"
+    else
+        fail "omarchy/patches/$p.patch is vendored" "the step would warn and run stock Omarchy code"
+    fi
+done
+
+# The patches are context diffs against Omarchy's own shell. On a box that has
+# it, check they still apply — this is the early warning that an omarchy update
+# has moved the code out from under them, before a run reports it as a warning
+# and quietly leaves you with a stock bar.
+if have patch && [[ -r /usr/share/omarchy/shell/plugins/bar/Bar.qml ]]; then
+    for pair in "bar-islands:/usr/share/omarchy/shell/plugins/bar/Bar.qml:Bar.qml" \
+                "tray-collapse:/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml:Tray.qml"; do
+        pname="${pair%%:*}"; rest="${pair#*:}"; upstream="${rest%%:*}"; fname="${rest##*:}"
+        pdir="$(mktemp -d)"; cp "$upstream" "$pdir/$fname"
+        if patch -p1 --forward -s -d "$pdir" < "$REPO_ROOT/omarchy/patches/$pname.patch" >/dev/null 2>&1; then
+            pass "$pname.patch still applies to this machine's $fname"
+        else
+            fail "$pname.patch still applies to this machine's $fname" \
+                 "regenerate it against the installed Omarchy, or the bar comes back stock"
+        fi
+        rm -rf "$pdir"
+    done
+else
+    printf '  %s·%s no Omarchy shell installed — skipping the patch-applies check\n' "$DIM" "$RESET"
+fi
+
+# The background named in install.sh has to be one of the files this repo
+# actually carries, or the step warns and leaves the stock wallpaper up.
+if [[ -z "$OMARCHY_BACKGROUND" ]]; then
+    pass "no background pinned — nothing to vendor"
+elif [[ -f "$REPO_ROOT/omarchy/backgrounds/$OMARCHY_THEME/$OMARCHY_BACKGROUND" ]]; then
+    pass "the pinned background is vendored for the $OMARCHY_THEME theme"
+else
+    fail "the pinned background is vendored for the $OMARCHY_THEME theme" \
+         "OMARCHY_BACKGROUND names a file that isn't in omarchy/backgrounds/$OMARCHY_THEME/"
+fi
+
+# Hyprland rules live in a file this repo owns, loaded by one dofile line, so
+# the user's own hyprland.lua is never rewritten. Both halves have to be there.
+if [[ -f "$REPO_ROOT/omarchy/hypr/personal.lua" ]]; then
+    pass "the Hyprland rules file is vendored"
+else
+    fail "the Hyprland rules file is vendored" "the dofile line would point at nothing"
+fi
+if awk '/^omarchy_hypr\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -qF .hypr/arch-setup.lua'; then
+    pass "the dofile line is only appended when it isn't already there"
+else
+    fail "the dofile line is only appended when it isn't already there" \
+         "every run would add another copy to hyprland.lua"
+fi
+
+out="$(HOME="$tmp/omonly" bash "$SCRIPT" --only omarchy --dry-run 2>&1)"; rc=$?
+check_eq "--only omarchy is a valid step" "0" "$rc"
+check_contains "--only omarchy runs the Omarchy step" "Omarchy desktop" "$out"
+
 # ── --dry-run is genuinely inert ──────────────────────────────────────────────
 group "--dry-run changes nothing"
 

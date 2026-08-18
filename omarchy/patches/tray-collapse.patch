@@ -1,0 +1,73 @@
+--- a/Tray.qml
++++ b/Tray.qml
+@@ -233,28 +233,23 @@
+ 
+       readonly property int pinnedWidth: pinnedRow.implicitWidth
+       readonly property int drawerBlockWidth: root.allItems.length > 0 ? expandIcon.implicitWidth + root.drawerExtent : 0
++      // Width the collapsed drawer would otherwise hold open for its slide-in.
++      // Upstream reserves it permanently, which is invisible on an edge-to-edge
++      // bar but leaves a blank tail on an island bar. Shifting the block left by
++      // this much and taking it back off the width parks the chevron at the
++      // section's inner edge and lets the island track what is actually drawn.
++      readonly property int collapsedGap: Math.max(0, Math.round(root.drawerExtent - root.revealExtent))
+ 
+-      implicitWidth: pinnedWidth + drawerBlockWidth
++      implicitWidth: pinnedWidth + drawerBlockWidth - collapsedGap
+       implicitHeight: root.barSize
+-
+-      // Mask out the empty area the collapsed drawer reserves for its slide-in,
+-      // so hovering it doesn't trigger expand and clicks pass through.
+-      containmentMask: QtObject {
+-        function contains(point: point): bool {
+-          if (point.y < 0 || point.y > horizontalTrayRoot.height) return false
+-          // Drawer reveals leftward; chevron sits at the right end when collapsed
+-          // and slides left as it opens. The visible region starts at the chevron.
+-          var chevronX = root.drawerExtent - root.revealExtent
+-          if (point.x >= chevronX && point.x <= horizontalTrayRoot.drawerBlockWidth) return true
+-          // Pinned items, placed to the right of the drawer block.
+-          var pinnedStart = horizontalTrayRoot.drawerBlockWidth
+-          return point.x >= pinnedStart && point.x <= horizontalTrayRoot.implicitWidth
+-        }
+-      }
++      // Everything from local x 0 to implicitWidth is painted content now, so
++      // the item's own bounds are the input region; clipping keeps the drawer's
++      // off-box slide area from taking hover.
++      clip: true
+ 
+       Item {
+         id: drawerArea
+-        x: 0
++        x: -horizontalTrayRoot.collapsedGap
+         width: horizontalTrayRoot.drawerBlockWidth
+         height: root.barSize
+         visible: root.allItems.length > 0
+@@ -320,23 +315,17 @@
+ 
+       readonly property int pinnedHeight: pinnedCol.implicitHeight
+       readonly property int drawerBlockHeight: root.allItems.length > 0 ? expandIcon.implicitHeight + root.drawerExtent : 0
++      // See the horizontal tray: collapse the reserved slide-in space so the
++      // island tracks the drawn content instead of the held-open block.
++      readonly property int collapsedGap: Math.max(0, Math.round(root.drawerExtent - root.revealExtent))
+ 
+       implicitWidth: root.barSize
+-      implicitHeight: pinnedHeight + drawerBlockHeight
+-
+-      containmentMask: QtObject {
+-        function contains(point: point): bool {
+-          if (point.x < 0 || point.x > verticalTrayRoot.width) return false
+-          var chevronY = root.drawerExtent - root.revealExtent
+-          if (point.y >= chevronY && point.y <= verticalTrayRoot.drawerBlockHeight) return true
+-          var pinnedStart = verticalTrayRoot.drawerBlockHeight
+-          return point.y >= pinnedStart && point.y <= verticalTrayRoot.implicitHeight
+-        }
+-      }
++      implicitHeight: pinnedHeight + drawerBlockHeight - collapsedGap
++      clip: true
+ 
+       Item {
+         id: drawerArea
+-        y: 0
++        y: -verticalTrayRoot.collapsedGap
+         width: root.barSize
+         height: verticalTrayRoot.drawerBlockHeight
+         visible: root.allItems.length > 0

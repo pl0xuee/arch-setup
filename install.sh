@@ -187,6 +187,61 @@ TRAY_HIDDEN=(
     org.kde.plasma.keyboardindicator
 )
 
+# ── Omarchy desktop ───────────────────────────────────────────────────────────
+#
+# Omarchy-only settings, applied by configure_omarchy() and skipped on every
+# other desktop. Taken from the real machine rather than guessed.
+
+# Shell text size in px — the bar included, because the bar's height scales from
+# it ([bar] scale-with-font defaults to true). Omarchy's default is 12. This is
+# written to ~/.config/omarchy/shell.toml as [font] base-size, which moves the
+# shell alone: `omarchy display text size` writes the same key but drags GTK's
+# text-scaling-factor and every terminal's font size along with it.
+OMARCHY_SHELL_FONT_PX=16
+
+# Theme, and which of its backgrounds to select. The background is a filename
+# inside omarchy/backgrounds/<theme>/ in this repo — leave it empty to install
+# the wallpapers without picking one.
+OMARCHY_THEME=solitude
+OMARCHY_BACKGROUND=1308922.jpg
+
+# foot's font size, in points. Omarchy ships 9, which is small on a 3440x1440.
+FOOT_FONT_SIZE=11
+
+# Clock widget formats. Qt date-format strings, not strftime.
+OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"
+OMARCHY_CLOCK_FORMAT_VERTICAL=$'h\n—\nmm\nAP'
+
+# Which monitors get a bar, by connector name (`hyprctl monitors` — DP-1,
+# HDMI-A-1). Empty means every monitor, which is stock Omarchy's behaviour. Only
+# the patched bar clone honours this; a name that matches nothing on the box
+# falls back to every monitor, so a machine with different displays still gets a
+# bar rather than none.
+OMARCHY_BAR_MONITORS=(
+    DP-1                    # the ultrawide — the other two are secondary
+)
+
+# Bar widgets added to the right section, in order, directly after the tray.
+OMARCHY_BAR_RIGHT_EXTRA=(
+    omarchy.dropbox         # the Dropbox flatpak this script installs
+    crmne.hyprmoncfg        # multi-monitor layout switcher (the plugin below)
+)
+
+# Third-party shell plugins, installed with `omarchy plugin add`.
+OMARCHY_PLUGINS_GIT=(
+    https://github.com/crmne/omarchy-hyprmoncfg.git
+)
+
+# Which AI agent Omarchy's menu and keybindings launch. Empty leaves it unset.
+OMARCHY_DEFAULT_AGENT=claude
+
+# sha256 of the two upstream files our QML patches were generated against
+# (Omarchy 4.0.0-1). A mismatch doesn't stop the patch being tried — it just
+# means the warning fires first, so a bar that comes back stock after an
+# `omarchy update` has an obvious explanation in the run log.
+OMARCHY_BAR_BASELINE_SHA=8bbe27ad7c617da1a3770fd5731b8cc79935ac34f04873c3933f7ff581a7cb15
+OMARCHY_TRAY_BASELINE_SHA=36d26f81d8e37561cdd4addc3ccd0df0490415d196d518ead88ea95af0d02466
+
 SKIP_UPGRADE=0
 DRY_RUN=0
 ONLY=""
@@ -210,7 +265,7 @@ else
     BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; RESET=""
 fi
 STEP_N=0
-STEP_TOTAL=13    # preflight + 12 steps; recalculated below if --only is used
+STEP_TOTAL=14    # preflight + 13 steps; recalculated below if --only is used
 
 step() {
     STEP_N=$((STEP_N + 1))
@@ -514,7 +569,7 @@ Options:
   --only STEP     Run one step only:
                     packages | flatpak | agenttilecli | streamhub | consolevault
                     discripper | griddown | gammagui | lorerim | wotlk
-                    musicai | config
+                    musicai | config | omarchy
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
   --desktop D     Force the desktop instead of detecting it:
                     kde | omarchy | other
@@ -524,15 +579,20 @@ Steps:
   config          Enables the LACT daemon and puts ~/.local/bin on PATH. Both
                   are needed for a working setup, so they run by default —
                   there is nothing to do by hand after this script.
+  omarchy         The Omarchy desktop: shell text size, bar layout and widgets,
+                  the patched bar/tray plugins, theme and wallpaper, Hyprland
+                  window rules, monitors and input. Skipped on any other
+                  desktop.
 
 Desktops:
   The desktop is detected, and the steps that only exist on one of them are
-  gated on it. On KDE Plasma everything runs. On Omarchy (Arch + Hyprland)
-  the Plasma panel and powerdevil steps are skipped — there is no panel to pin
-  to and powerdevil is not what handles idle there. Nothing else differs: the
-  signed [cachyos] repo is added there (below Arch's, so Arch still wins every
-  name collision) and the CachyOS-only packages install as they do anywhere.
-  No AUR helper is used, or needed.
+  gated on it. On KDE Plasma the Plasma panel and powerdevil steps run and the
+  omarchy step is skipped. On Omarchy (Arch + Hyprland) it is the other way
+  round — there is no Plasma panel to pin to, and powerdevil is not what
+  handles idle there. Everything else is common to both: the signed [cachyos]
+  repo is added on either (below Arch's, so Arch still wins every name
+  collision) and the CachyOS-only packages install as they do anywhere. No AUR
+  helper is used, or needed.
 
 Notes:
   A full system upgrade runs first by default. On Arch-based systems that
@@ -552,7 +612,7 @@ while [[ $# -gt 0 ]]; do
         # Guard the arg count first: `shift 2` with only one argument left
         # returns non-zero, and set -e would then exit silently — no usage, no
         # error, nothing. `./install.sh --only` would just print nothing and fail.
-        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config)"
+        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
         # Same arg-count guard as --only, for the same reason: `shift 2` with
@@ -567,8 +627,8 @@ done
 
 if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
-        packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config) ;;
-        *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config" ;;
+        packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config|omarchy) ;;
+        *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy" ;;
     esac
 fi
 if [[ -n "$DESKTOP_FORCED" ]]; then
@@ -826,9 +886,12 @@ ensure_cachyos_repo() {
     # One mirror, not the full generated list. This is a bootstrap: the real
     # cachyos-mirrorlist package is installed from the repo below and overwrites
     # this file with the maintained list.
-    printf '# Bootstrapped by cachyos-setup; replaced by the cachyos-mirrorlist package.\nServer = %s\n' \
+    printf '# Bootstrapped by arch-setup; replaced by the cachyos-mirrorlist package.\nServer = %s\n' \
         "$CACHYOS_MIRROR" | sudo tee "$mirrorlist" >/dev/null
 
+    # Keeps the old name after the repo was renamed to arch-setup: machines
+    # provisioned before the rename already have this file, and the README's
+    # undo instructions point at it. A new name would just orphan both.
     sudo cp -n "$conf" "$conf.before-cachyos-setup" 2>/dev/null || true
 
     # multilib before cachyos, because cachyos-gaming-applications pulls steam
@@ -841,7 +904,7 @@ ensure_cachyos_repo() {
             || warn "couldn't enable multilib — Steam and the lib32 packages will be skipped"
     fi
 
-    printf '\n# Added by cachyos-setup. Deliberately LAST: pacman takes a package from the\n# first repo that has it, so every name Arch also carries still comes from Arch.\n[cachyos]\nInclude = %s\n' \
+    printf '\n# Added by arch-setup. Deliberately LAST: pacman takes a package from the\n# first repo that has it, so every name Arch also carries still comes from Arch.\n[cachyos]\nInclude = %s\n' \
         "$mirrorlist" | sudo tee -a "$conf" >/dev/null
 
     if ! sudo pacman -Sy >/dev/null 2>&1; then
@@ -3026,6 +3089,593 @@ configure_taskbar() {
     return 0
 }
 
+# ── Omarchy desktop ───────────────────────────────────────────────────────────
+#
+# Everything Omarchy-specific lives in this one step, gated on the detected
+# desktop, and every piece of it is skipped with a reason on KDE or anything
+# else. The pieces are separate functions rather than one long one because each
+# writes a different file and each has to be able to fail on its own: a theme
+# that won't apply must not stop the bar from being configured.
+#
+# What it configures, and where that lands:
+#
+#   ~/.config/omarchy/shell.toml    shell text size          (hot-reloaded)
+#   ~/.config/omarchy/shell.json    bar layout and widgets   (hot-reloaded)
+#   ~/.config/omarchy/plugins/      the bar and tray clones, hyprmoncfg
+#   ~/.config/hypr/                 window rules, input, monitors
+#   ~/.config/foot/foot.ini         terminal font size
+#
+# Nothing here writes to /usr/share/omarchy. That directory belongs to the
+# omarchy package and `omarchy update` overwrites it, so a change made there
+# survives exactly until the next update.
+configure_omarchy() {
+    step "Omarchy desktop"
+
+    if [[ "$DESKTOP" != omarchy ]]; then
+        skip "not Omarchy ($(desktop_label)) — there's no omarchy-shell here to configure"
+        report "Omarchy" "SKIPPED (not Omarchy — $(desktop_label))"
+        return 0
+    fi
+
+    if ! have omarchy; then
+        warn "the omarchy CLI isn't on PATH — skipping the Omarchy desktop config"
+        report "Omarchy" "SKIPPED (omarchy CLI missing)"
+        return 0
+    fi
+
+    # Set by the pieces below when they change something the running shell has
+    # already read, so the restart at the end happens once instead of five times.
+    OMARCHY_SHELL_DIRTY=0
+
+    omarchy_shell_font
+    omarchy_theme
+    omarchy_background
+    omarchy_plugins
+    omarchy_bar_layout
+    omarchy_hypr
+    omarchy_terminal_font
+    omarchy_default_agent
+    omarchy_restart_shell
+
+    return 0
+}
+
+# Shell text size — the bar and everything else omarchy-shell draws.
+#
+# ~/.config/omarchy/shell.toml is a machine-level override layered on top of
+# whichever theme is active, so the size survives a theme switch, and the shell
+# watches the file, so it re-flows live. [font] base-size is the rem root every
+# other size derives from; the bar's own height tracks it too, because [bar]
+# scale-with-font defaults to true.
+#
+# Deliberately NOT `omarchy display text size`, which writes this same key but
+# also drives GTK's text-scaling-factor and every terminal's font size in
+# lockstep. We want the shell bigger and the rest of the desktop left alone.
+#
+# The awk below mirrors omarchy-display-text-size's own upsert: replace
+# base-size in place if it's there, insert it into an existing [font] section,
+# or append a fresh section. Any other section in the file is left untouched.
+omarchy_shell_font() {
+    local conf="$HOME/.config/omarchy/shell.toml"
+    local want="$OMARCHY_SHELL_FONT_PX" current=""
+
+    if [[ -f "$conf" ]]; then
+        current="$(awk '
+            /^[[:space:]]*\[/ { in_font = ($0 ~ /^[[:space:]]*\[font\]([[:space:]]|$)/); next }
+            in_font && /^[[:space:]]*base-size[[:space:]]*=/ {
+                v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*(#.*)?$/, "", v)
+                print v; exit
+            }' "$conf")"
+    fi
+
+    if [[ "$current" == "$want" ]]; then
+        skip "shell text already ${want}px"
+        report "Omarchy shell" "text already ${want}px"
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "set [font] base-size = $want in $conf"
+        report "Omarchy shell" "would set shell text to ${want}px"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$conf")"
+    if [[ ! -f "$conf" ]]; then
+        printf '[font]\nbase-size = %s\n' "$want" > "$conf"
+    else
+        local tmp; tmp="$(mktemp)"
+        awk -v val="$want" '
+            function emit() { print "base-size = " val; done = 1 }
+            /^[[:space:]]*\[/ {
+                if (in_font && !done) emit()
+                in_font = ($0 ~ /^[[:space:]]*\[font\]([[:space:]]|$)/)
+                print; next
+            }
+            in_font && /^[[:space:]]*base-size[[:space:]]*=/ { if (!done) emit(); next }
+            { print }
+            END {
+                if (in_font && !done) emit()
+                else if (!done) { print "[font]"; print "base-size = " val }
+            }' "$conf" > "$tmp"
+        mv "$tmp" "$conf"
+    fi
+
+    OMARCHY_SHELL_DIRTY=1
+    ok "shell text ${want}px (GTK apps and terminals left alone)"
+    report "Omarchy shell" "text ${want}px"
+}
+
+# Theme. `omarchy theme set` regenerates every themed config and restarts what
+# needs restarting, so it is not a cheap no-op — check the current theme first.
+omarchy_theme() {
+    local current=""
+    [[ -r "$HOME/.local/state/omarchy/current/theme.name" ]] \
+        && current="$(cat "$HOME/.local/state/omarchy/current/theme.name")"
+
+    if [[ "$current" == "$OMARCHY_THEME" ]]; then
+        skip "theme already $OMARCHY_THEME"
+        report "Omarchy theme" "already $OMARCHY_THEME"
+        return 0
+    fi
+
+    if run omarchy theme set "$OMARCHY_THEME"; then
+        ok "theme set to $OMARCHY_THEME"
+        report "Omarchy theme" "$OMARCHY_THEME"
+    else
+        warn "couldn't set the $OMARCHY_THEME theme — is it installed? (omarchy theme list)"
+        report "Omarchy theme" "FAILED to set $OMARCHY_THEME"
+    fi
+}
+
+# Wallpapers. Omarchy reads a theme's backgrounds from
+# ~/.config/omarchy/backgrounds/<theme>/, which is the user's own folder — the
+# stock ones live under the theme in /usr/share and are left alone, so these are
+# added alongside them rather than replacing anything.
+omarchy_background() {
+    local src="$REPO_DIR/omarchy/backgrounds/$OMARCHY_THEME"
+    local dest="$HOME/.config/omarchy/backgrounds/$OMARCHY_THEME"
+
+    if [[ ! -d "$src" ]]; then
+        skip "no wallpapers vendored for $OMARCHY_THEME"
+        return 0
+    fi
+
+    local copied=0 f
+    for f in "$src"/*; do
+        [[ -f "$f" ]] || continue
+        if [[ -f "$dest/$(basename "$f")" ]] && cmp -s "$f" "$dest/$(basename "$f")"; then
+            continue
+        fi
+        [[ $DRY_RUN -eq 1 ]] || mkdir -p "$dest"
+        run cp "$f" "$dest/"
+        copied=$((copied + 1))
+    done
+
+    if [[ $copied -gt 0 ]]; then
+        ok "$copied wallpaper(s) installed for $OMARCHY_THEME"
+        report "Omarchy wallpaper" "$copied installed"
+    else
+        skip "wallpapers already installed"
+    fi
+
+    # Selecting one is separate: the copy above is just files on disk, and the
+    # current background is a symlink in ~/.local/state that the shell follows.
+    [[ -n "$OMARCHY_BACKGROUND" ]] || return 0
+    local want="$dest/$OMARCHY_BACKGROUND"
+    if [[ ! -f "$want" && $DRY_RUN -eq 0 ]]; then
+        warn "background $OMARCHY_BACKGROUND isn't in $dest — leaving the current one"
+        return 0
+    fi
+
+    local current=""
+    current="$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null || true)"
+    if [[ "$current" == "$want" ]]; then
+        skip "background already $OMARCHY_BACKGROUND"
+        return 0
+    fi
+
+    if run omarchy theme bg set "$want"; then
+        ok "background set to $OMARCHY_BACKGROUND"
+        report "Omarchy wallpaper" "set to $OMARCHY_BACKGROUND"
+    else
+        warn "couldn't set the background to $OMARCHY_BACKGROUND"
+    fi
+}
+
+# Shell plugins: the third-party ones from git, then the two first-party ones we
+# carry patches for.
+#
+# The bar and the tray are Omarchy's own code. Editing it in place under
+# /usr/share/omarchy would last until the next `omarchy update`, so both are
+# cloned into ~/.config/omarchy/plugins/ — which is what `omarchy plugin clone`
+# is for — and the clone is patched. The clone id is always
+# <username>.<plugin>, assigned by omarchy-plugin-clone itself.
+omarchy_plugins() {
+    local url found d
+
+    for url in "${OMARCHY_PLUGINS_GIT[@]}"; do
+        found=""
+        for d in "$HOME"/.config/omarchy/plugins/*/; do
+            [[ -d "$d/.git" ]] || continue
+            [[ "$(git -C "$d" remote get-url origin 2>/dev/null)" == "$url" ]] && found="$d"
+        done
+        if [[ -n "$found" ]]; then
+            skip "$(basename "${found%/}") already installed"
+            continue
+        fi
+        if run omarchy plugin add "$url" --enable --yes; then
+            ok "installed $(basename "$url" .git)"
+            report "Omarchy plugins" "added $(basename "$url" .git)"
+            OMARCHY_SHELL_DIRTY=1
+        else
+            warn "couldn't install the shell plugin from $url"
+        fi
+    done
+
+    omarchy_clone_and_patch omarchy.bar  "$REPO_DIR/omarchy/patches/bar-islands.patch" \
+        "/usr/share/omarchy/shell/plugins/bar/Bar.qml" "$OMARCHY_BAR_BASELINE_SHA" \
+        "island bar"
+    omarchy_clone_and_patch omarchy.tray "$REPO_DIR/omarchy/patches/tray-collapse.patch" \
+        "/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml" "$OMARCHY_TRAY_BASELINE_SHA" \
+        "tray drawer"
+}
+
+# Clone one first-party plugin and apply our patch to it.
+#
+#   $1  source plugin id (omarchy.bar)
+#   $2  patch file
+#   $3  the upstream file the patch was generated against
+#   $4  that file's sha256 at the time it was generated
+#   $5  human label for the messages
+#
+# A patch that no longer applies is a warning, never a failure: Omarchy ships new
+# shell code on its own schedule, and a bar that looks stock is a far better
+# outcome than a run that dies — or, worse, a half-patched QML file that stops
+# the shell from starting at all.
+omarchy_clone_and_patch() {
+    local source_id="$1" patch_file="$2" upstream="$3" baseline_sha="$4" label="$5"
+    local clone_id="${USER:-$(id -un)}.${source_id#omarchy.}"
+    local dir="$HOME/.config/omarchy/plugins/$clone_id"
+
+    if [[ ! -f "$patch_file" ]]; then
+        warn "$patch_file is missing — skipping the $label patch"
+        return 0
+    fi
+
+    # patch rides in with base-devel, which the packages step installs, so this
+    # only fires on a --only omarchy run against a box that never had one.
+    if ! have patch; then
+        warn "the 'patch' command isn't installed — skipping the $label patch"
+        report "Omarchy plugins" "SKIPPED $label (no patch command)"
+        return 0
+    fi
+
+    if [[ ! -d "$dir" ]]; then
+        if ! run omarchy plugin clone "$source_id"; then
+            warn "couldn't clone $source_id — skipping the $label patch"
+            return 0
+        fi
+        OMARCHY_SHELL_DIRTY=1
+    fi
+
+    # -R --dry-run succeeds when the patch is ALREADY in the file: that is the
+    # idempotence check. Without it a second run would fail noisily, or apply the
+    # hunks twice with enough fuzz to do real damage. It reads and writes
+    # nothing, so it runs before the dry-run branch — a dry run that claims it
+    # would patch an already-patched file is a dry run telling you the wrong
+    # thing about the machine.
+    if [[ -d "$dir" ]] && patch -p1 -R --dry-run -f -s -d "$dir" < "$patch_file" >/dev/null 2>&1; then
+        skip "$clone_id already carries the $label patch"
+        report "Omarchy plugins" "$clone_id already patched ($label)"
+        return 0
+    fi
+
+    # Nothing left to patch on a dry run: on a fresh box the clone above never
+    # happened, so there is no file here to test the hunks against.
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "patch -p1 -d $dir < $patch_file   # $label"
+        report "Omarchy plugins" "would patch $clone_id ($label)"
+        return 0
+    fi
+
+    # Warn, then try anyway. The patch is context-based, so it often still
+    # applies to a changed file — and when it doesn't, the failure below says so.
+    if [[ -n "$baseline_sha" && -r "$upstream" ]]; then
+        local now; now="$(sha256sum "$upstream" | awk '{print $1}')"
+        if [[ "$now" != "$baseline_sha" ]]; then
+            warn "$(basename "$upstream") has changed since the $label patch was made — trying it anyway"
+        fi
+    fi
+
+    if patch -p1 --forward -s -d "$dir" < "$patch_file" >/dev/null 2>&1; then
+        OMARCHY_SHELL_DIRTY=1
+        ok "$clone_id patched ($label)"
+        report "Omarchy plugins" "$clone_id patched ($label)"
+    else
+        warn "the $label patch didn't apply to $clone_id — it's running Omarchy's stock code"
+        report "Omarchy plugins" "$label patch FAILED (stock $source_id in use)"
+        # Leave no half-applied file behind: .rej/.orig next to live QML would
+        # be loaded by the shell as if it were code.
+        find "$dir" -name '*.rej' -o -name '*.orig' -delete 2>/dev/null || true
+    fi
+}
+
+# Bar layout: which widgets sit where, and the two clones taking over from the
+# first-party bar and tray.
+#
+# shell.json is a plain JSON file the shell watches, so this applies live. It is
+# edited rather than overwritten — the layout is something you also change by
+# dragging widgets around the bar, and a setup script has no business throwing
+# that away on every run.
+omarchy_bar_layout() {
+    local conf="$HOME/.config/omarchy/shell.json"
+    local stock="/usr/share/omarchy/config/omarchy/shell.json"
+    local bar_id="${USER:-$(id -un)}.bar"
+    local tray_id="${USER:-$(id -un)}.tray"
+
+    if [[ ! -f "$conf" ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            run "seed $conf from $stock"
+        elif [[ -r "$stock" ]]; then
+            mkdir -p "$(dirname "$conf")"
+            cp "$stock" "$conf"
+        else
+            warn "no $conf and no stock shell.json to seed it from — skipping the bar layout"
+            return 0
+        fi
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "set bar.id=$bar_id, tray=$tray_id, clock format, extra widgets in $conf"
+        report "Omarchy bar" "would set the bar layout"
+        return 0
+    fi
+
+    # Only claim the cloned bar/tray when the clone is actually there and
+    # patched — pointing shell.json at a plugin that doesn't exist is how you
+    # get no bar at all.
+    [[ -d "$HOME/.config/omarchy/plugins/$bar_id"  ]] || bar_id=""
+    [[ -d "$HOME/.config/omarchy/plugins/$tray_id" ]] || tray_id=""
+
+    local before after
+    before="$(cat "$conf")"
+
+    BAR_ID="$bar_id" TRAY_ID="$tray_id" \
+    CLOCK_FORMAT="$OMARCHY_CLOCK_FORMAT" CLOCK_VERTICAL="$OMARCHY_CLOCK_FORMAT_VERTICAL" \
+    EXTRA_RIGHT="$(IFS=,; printf '%s' "${OMARCHY_BAR_RIGHT_EXTRA[*]}")" \
+    BAR_MONITORS="$(IFS=,; printf '%s' "${OMARCHY_BAR_MONITORS[*]}")" \
+    python - "$conf" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+
+bar = data.setdefault("bar", {})
+layout = bar.setdefault("layout", {})
+right = layout.setdefault("right", [])
+center = layout.setdefault("center", [])
+
+bar_id, tray_id = os.environ["BAR_ID"], os.environ["TRAY_ID"]
+
+# The bar plugin itself. Absent id means "use the built-in bar", which is what
+# the key looks like on a stock install, so only write it when we have a clone.
+if bar_id:
+    bar["id"] = bar_id
+
+# The tray widget is a layout entry like any other, so swapping it is a matter
+# of renaming the entry in place — which keeps its position in the section.
+if tray_id:
+    for entry in right:
+        if entry.get("id") in ("omarchy.tray", tray_id):
+            entry["id"] = tray_id
+
+# Extra widgets go directly after the tray, matching the real bar. Anything the
+# user has since dragged elsewhere is left where they put it.
+have_ids = {e.get("id") for e in right}
+extras = [w for w in os.environ["EXTRA_RIGHT"].split(",") if w and w not in have_ids]
+if extras:
+    tray_names = {tray_id, "omarchy.tray"} - {""}
+    at = next((i for i, e in enumerate(right) if e.get("id") in tray_names), -1)
+    right[at + 1:at + 1] = [{"id": w} for w in extras]
+
+# Which monitors carry a bar. Read by the patched bar clone; stock Omarchy has
+# no such key and puts one on every screen.
+monitors = [m for m in os.environ["BAR_MONITORS"].split(",") if m]
+if monitors:
+    bar["monitors"] = monitors
+
+# Clock formats. Qt date-format strings, and the widget re-renders on save.
+for entry in center:
+    if entry.get("id") == "omarchy.clock":
+        entry["format"] = os.environ["CLOCK_FORMAT"]
+        entry["verticalFormat"] = os.environ["CLOCK_VERTICAL"]
+
+# sort_keys matches how omarchy-shell itself serializes this file, so the next
+# widget you drag doesn't produce a diff that is mostly key reordering.
+with open(path, "w") as f:
+    json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
+    f.write("\n")
+PY
+
+    after="$(cat "$conf")"
+    if [[ "$before" == "$after" ]]; then
+        skip "bar layout already set"
+        report "Omarchy bar" "layout already set"
+    else
+        OMARCHY_SHELL_DIRTY=1
+        ok "bar layout set (${bar_id:-stock bar}, clock, ${#OMARCHY_BAR_RIGHT_EXTRA[@]} extra widget(s))"
+        report "Omarchy bar" "layout, clock format, ${#OMARCHY_BAR_RIGHT_EXTRA[@]} extra widget(s)"
+    fi
+}
+
+# Hyprland: window rules, input, monitors.
+#
+# ~/.config/hypr/*.lua are yours — Omarchy ships them once and never touches
+# them again, which is exactly why a setup script must not rewrite them either.
+# So the rules live in their own file that this repo owns and replaces whole,
+# and hyprland.lua gets one dofile line pointing at it. The only edits made to
+# Omarchy's own files are single lines, added only when they aren't there yet.
+omarchy_hypr() {
+    local hypr="$HOME/.config/hypr"
+    local changed=0
+
+    [[ -d "$hypr" ]] || { skip "no ~/.config/hypr — is this really Omarchy?"; return 0; }
+
+    # 1. The rules file, replaced wholesale on every run.
+    local src="$REPO_DIR/omarchy/hypr/personal.lua" dst="$hypr/arch-setup.lua"
+    if [[ -f "$src" ]] && ! cmp -s "$src" "$dst" && run cp "$src" "$dst"; then
+        changed=1
+        ok "window rules and session PATH installed (hypr/arch-setup.lua)"
+        report "Omarchy hypr" "window rules + session PATH"
+    fi
+
+    # 2. One line in hyprland.lua to load it. Appended at the end, which is
+    #    where Omarchy's own comment invites personal configuration, and after
+    #    require("hypr.input") so these rules win.
+    local main="$hypr/hyprland.lua"
+    if [[ -f "$main" ]] && ! grep -qF 'hypr/arch-setup.lua' "$main"; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            run "append the arch-setup.lua dofile line to $main"
+        else
+            printf '\n-- Added by arch-setup: personal window rules and session PATH.\ndofile(os.getenv("HOME") .. "/.config/hypr/arch-setup.lua")\n' >> "$main"
+        fi
+        changed=1
+    fi
+
+    # 3. Mouse acceleration, in input.lua where Omarchy documents input overrides.
+    #    Appended, not written: input.lua is also where you'd put a keyboard
+    #    layout, and that must survive.
+    local input_src="$REPO_DIR/omarchy/hypr/input-accel.lua" input="$hypr/input.lua"
+    if [[ -f "$input_src" && -f "$input" ]] && ! grep -qF 'accel_profile' "$input"; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            run "append the flat accel_profile block to $input"
+        else
+            printf '\n' >> "$input"
+            cat "$input_src" >> "$input"
+        fi
+        changed=1
+        ok "mouse acceleration off (flat accel profile)"
+        report "Omarchy hypr" "flat mouse accel"
+    fi
+
+    # 4. Monitors, if this repo carries a layout. Installed only when the file
+    #    isn't there: hyprmoncfg REGENERATES it every time you rearrange screens
+    #    in its bar widget, so overwriting on every run would throw away the
+    #    layout you just set on a machine whose displays differ from these.
+    local mon_src="$REPO_DIR/omarchy/hypr/monitors.lua" mon="$hypr/hyprmoncfg-monitors.lua"
+    if [[ -f "$mon_src" ]]; then
+        if [[ -f "$mon" ]]; then
+            skip "monitor layout already present — left as hyprmoncfg wrote it"
+        else
+            run cp "$mon_src" "$mon"
+            changed=1
+            ok "monitor layout installed (matched by display name, ignored on other hardware)"
+            report "Omarchy hypr" "monitor layout"
+        fi
+        # hyprmoncfg adds this line itself when it first writes a layout; on a
+        # rebuild we get there first. Same text, so it stays one line either way.
+        if [[ -f "$main" ]] && ! grep -qF 'hyprmoncfg-monitors.lua' "$main"; then
+            if [[ $DRY_RUN -eq 1 ]]; then
+                run "append the hyprmoncfg dofile line to $main"
+            else
+                printf '\n-- Added by hyprmoncfg: its generated monitor rules load last, so nothing before this can override the applied layout.\ndofile(os.getenv("HOME") .. "/.config/hypr/hyprmoncfg-monitors.lua")\n' >> "$main"
+            fi
+            changed=1
+        fi
+    fi
+
+    [[ $changed -eq 1 ]] || { skip "Hyprland config already set"; return 0; }
+
+    # Hyprland reloads on its own when a config file is saved, but only for the
+    # files it is watching — a brand new dofile target isn't one of them. An
+    # explicit reload also gives us configerrors to check, which is the
+    # difference between "applied" and "silently ignored".
+    if [[ $DRY_RUN -eq 0 && -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && have hyprctl; then
+        hyprctl reload >/dev/null 2>&1 || true
+        local errors; errors="$(hyprctl configerrors 2>/dev/null || true)"
+        if [[ -n "$errors" && "$errors" != *"no errors"* ]]; then
+            warn "Hyprland reported config errors after the reload: $errors"
+        fi
+    elif [[ $DRY_RUN -eq 0 ]]; then
+        info "  Hyprland isn't running here — the config applies at next login"
+    fi
+}
+
+# foot's font size. Omarchy ships 9pt, which is small on a big screen at scale 1.
+# The other three terminals it ships are left alone: this is the one in use, and
+# rewriting configs nobody reads is how a setup script grows a reputation.
+omarchy_terminal_font() {
+    local conf="$HOME/.config/foot/foot.ini"
+    [[ -f "$conf" ]] || { skip "no foot.ini — skipping the terminal font"; return 0; }
+
+    local current
+    current="$(sed -n 's/^font=.*:size=\([0-9.]*\).*$/\1/p' "$conf" | head -1)"
+    if [[ -z "$current" ]]; then
+        skip "no font=...:size= line in foot.ini — left alone"
+        return 0
+    fi
+    if [[ "$current" == "$FOOT_FONT_SIZE" ]]; then
+        skip "foot font already ${FOOT_FONT_SIZE}pt"
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "set foot font size to $FOOT_FONT_SIZE in $conf"
+        report "Omarchy terminal" "would set foot font to ${FOOT_FONT_SIZE}pt"
+        return 0
+    fi
+
+    sed -i "s/^\(font=.*:size=\)[0-9.]*/\1$FOOT_FONT_SIZE/" "$conf"
+    ok "foot font ${FOOT_FONT_SIZE}pt (was ${current}pt)"
+    report "Omarchy terminal" "foot font ${FOOT_FONT_SIZE}pt"
+    have omarchy && run omarchy restart terminal >/dev/null 2>&1 || true
+}
+
+# Which AI agent Omarchy's menu and keybindings launch. Omarchy ships no
+# default and invites you to pick one on first update; this answers that
+# question up front so the invitation never fires.
+omarchy_default_agent() {
+    [[ -n "$OMARCHY_DEFAULT_AGENT" ]] || return 0
+    local f="$HOME/.config/omarchy/defaults/agent"
+
+    if [[ -r "$f" && "$(cat "$f" 2>/dev/null)" == "$OMARCHY_DEFAULT_AGENT" ]]; then
+        skip "default agent already $OMARCHY_DEFAULT_AGENT"
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "write $OMARCHY_DEFAULT_AGENT to $f"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$f")"
+    printf '%s\n' "$OMARCHY_DEFAULT_AGENT" > "$f"
+    ok "default agent set to $OMARCHY_DEFAULT_AGENT"
+    report "Omarchy" "default agent $OMARCHY_DEFAULT_AGENT"
+}
+
+# One restart at the end instead of one per change.
+#
+# shell.json, shell.toml and user plugin code all hot-reload on save, so this is
+# belt-and-braces for the cases that don't: a plugin that was cloned or added
+# mid-run has to be picked up by the registry, not just re-read.
+omarchy_restart_shell() {
+    [[ ${OMARCHY_SHELL_DIRTY:-0} -eq 1 ]] || return 0
+
+    if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        info "  no Hyprland session here — the shell picks all this up at next login"
+        return 0
+    fi
+
+    if run omarchy restart shell; then
+        ok "omarchy-shell restarted"
+    else
+        warn "couldn't restart omarchy-shell — log out and back in to pick up the changes"
+    fi
+}
+
 ensure_path() {
     # Deliberately does NOT test "$PATH".
     #
@@ -3121,6 +3771,7 @@ main() {
     wanted wotlk        && install_wotlk
     wanted musicai      && install_musicai
     wanted config       && configure_system
+    wanted omarchy      && configure_omarchy
 
     if [[ $DRY_RUN -eq 1 ]]; then
         box "$BOLD$YELLOW" \

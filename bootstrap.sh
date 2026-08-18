@@ -2,7 +2,7 @@
 #
 # One-liner entry point. On a fresh CachyOS or Omarchy box:
 #
-#   curl -fsSL https://raw.githubusercontent.com/pl0xuee/cachyos-setup/master/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/pl0xuee/arch-setup/master/bootstrap.sh | bash
 #
 # It clones the repo and runs install.sh. It has to clone rather than just pipe
 # install.sh into bash, because install.sh reads its package lists from
@@ -12,8 +12,8 @@
 # Piping a script from the internet into bash means running whatever is at that
 # URL, sight unseen. If you'd rather look first (you should):
 #
-#   git clone https://github.com/pl0xuee/cachyos-setup.git
-#   cd cachyos-setup
+#   git clone https://github.com/pl0xuee/arch-setup.git
+#   cd arch-setup
 #   less install.sh
 #   ./install.sh --dry-run
 #   ./install.sh
@@ -24,8 +24,8 @@
 #
 set -euo pipefail
 
-REPO_URL="https://github.com/pl0xuee/cachyos-setup.git"
-DEST="${SETUP_DIR:-$HOME/Documents/Projects/cachyos-setup}"
+REPO_URL="https://github.com/pl0xuee/arch-setup.git"
+DEST="${SETUP_DIR:-$HOME/Documents/Projects/arch-setup}"
 
 command -v git >/dev/null 2>&1 || {
     echo "error: git is required. Install it with: sudo pacman -S git" >&2
