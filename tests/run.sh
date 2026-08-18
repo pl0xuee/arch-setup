@@ -1387,6 +1387,34 @@ gh() { printf 'tok-from-gh\n'; }          # the real binary exists, so `have gh`
 check_eq "falls back to the gh CLI" "tok-from-gh" "$(github_token)"
 unset -f gh
 
+# `gh` on PATH is not always the gh binary. Omarchy writes a wrapper into
+# ~/.local/bin for every mise-managed tool, and each runs `mise use -g <tool>`
+# first — which prints a status banner to STDOUT, ahead of the real output.
+# Gluing that onto a good token (which is what stripping the newline and
+# keeping both does) produces a 401 that reads exactly like a bad token.
+gh() { printf 'mise ~/.config/mise/config.toml tools: gh@2.97.0\ngho_realTokenValue123\n'; }
+check_eq "a wrapper's status banner is not mistaken for the token" \
+         "gho_realTokenValue123" "$(github_token)"
+unset -f gh
+
+# ...and the same when a wrapper prints its banner after the command's output.
+gh() { printf 'gho_realTokenValue123\nmise ~/.config/mise/config.toml tools: gh@2.97.0\n'; }
+check_eq "a trailing banner is ignored too" "gho_realTokenValue123" "$(github_token)"
+unset -f gh
+
+# Nothing token-shaped at all must read as "no token" — the unauthenticated
+# path — rather than as a token GitHub will reject with a misleading 401.
+gh() { printf 'mise ~/.config/mise/config.toml tools: gh@2.97.0\n'; }
+check_eq "banner-only output yields no token, not a bad one" "" "$(github_token)"
+unset -f gh
+
+# An explicit token is the user's own choice and is passed through as set:
+# classic PATs are 40 bare hex characters with no prefix to match on.
+GH_TOKEN=0123456789abcdef0123456789abcdef01234567
+check_eq "an explicit classic PAT is passed through verbatim" \
+         "0123456789abcdef0123456789abcdef01234567" "$(github_token)"
+unset GH_TOKEN
+
 rl_body='{"message":"API rate limit exceeded for 1.2.3.4.","documentation_url":"https://docs.github.com/"}'
 
 msg="$(github_api_diagnose 403 "$rl_body" 0 2>&1)"
@@ -2104,6 +2132,36 @@ if awk '/^omarchy_hypr\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -qF .hypr/arch-setup
 else
     fail "the dofile line is only appended when it isn't already there" \
          "every run would add another copy to hyprland.lua"
+fi
+
+# ── mise's banner ─────────────────────────────────────────────────────────────
+#
+# The setting has to land INSIDE an existing [settings] table: TOML rejects the
+# same table twice, and a config mise refuses to parse is worse than the banner.
+if have mise; then
+    mq_home="$tmp/mqhome"; mkdir -p "$mq_home/.config/mise"
+    printf '[tools]\ngh = "latest"\n\n[settings]\nidiomatic_version_file_enable_tools = []\n' \
+        > "$mq_home/.config/mise/config.toml"
+    ( HOME="$mq_home"; DRY_RUN=0; omarchy_mise_quiet ) >/dev/null 2>&1
+    mq="$(cat "$mq_home/.config/mise/config.toml" 2>/dev/null || true)"
+
+    check_contains "quiet lands in the existing [settings]" "quiet = true" "$mq"
+    check_eq "no second [settings] table is written" "1" "$(grep -c '^\[settings\]' <<<"$mq")"
+    check_contains "the settings already there survive" "idiomatic_version_file_enable_tools" "$mq"
+
+    mq_once="$mq"
+    ( HOME="$mq_home"; DRY_RUN=0; omarchy_mise_quiet ) >/dev/null 2>&1
+    check_eq "a second run adds nothing" "$mq_once" "$(cat "$mq_home/.config/mise/config.toml")"
+
+    mq2_home="$tmp/mqhome2"; mkdir -p "$mq2_home/.config/mise"
+    printf '[tools]\ngh = "latest"\n' > "$mq2_home/.config/mise/config.toml"
+    ( HOME="$mq2_home"; DRY_RUN=0; omarchy_mise_quiet ) >/dev/null 2>&1
+    mq2="$(cat "$mq2_home/.config/mise/config.toml" 2>/dev/null || true)"
+    check_contains "[settings] is appended when the config has none" "[settings]" "$mq2"
+    check_contains "...with the quiet setting in it" "quiet = true" "$mq2"
+    check_contains "the tools section is left alone" 'gh = "latest"' "$mq2"
+else
+    printf '  %s·%s mise not installed — skipping the banner setting\n' "$DIM" "$RESET"
 fi
 
 out="$(HOME="$tmp/omonly" bash "$SCRIPT" --only omarchy --dry-run 2>&1)"; rc=$?

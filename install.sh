@@ -294,9 +294,27 @@ github_token() {
     local t=""
     if   [[ -n "${GH_TOKEN:-}" ]];     then t="$GH_TOKEN"
     elif [[ -n "${GITHUB_TOKEN:-}" ]]; then t="$GITHUB_TOKEN"
-    elif have gh;                      then t="$(gh auth token 2>/dev/null || true)"
+    elif have gh; then
+        # `gh` is not always the gh binary. Omarchy generates a wrapper in
+        # ~/.local/bin for every mise-managed tool, and each one runs
+        # `mise use -g <tool>` first — which prints "mise <config> tools: ..."
+        # to STDOUT, ahead of the command's real output. Take the token out of
+        # whatever else landed on the pipe: a token is one unbroken word, and a
+        # status banner is a sentence. Matching on "has no whitespace" rather
+        # than on a token prefix keeps classic PATs, fine-grained tokens and
+        # whatever GitHub ships next all working.
+        #
+        # Not cosmetic. Stripping the newline and keeping both (what this used
+        # to do) glues the banner onto a perfectly good token, and GitHub
+        # answers that with 401 — which this script then reports as "the token
+        # was rejected", sending you to check a token that was never the
+        # problem.
+        t="$(gh auth token 2>/dev/null | grep -xE '[^[:space:]]+' | tail -n1 || true)"
     fi
-    # A stray newline out of `gh auth token` would terminate the header early.
+    # An explicit GH_TOKEN/GITHUB_TOKEN is passed through as the user set it —
+    # classic PATs are 40 bare hex characters and enterprise tokens carry their
+    # own shapes, so there is nothing safe to validate against. Only the stray
+    # newline goes, which would otherwise terminate the header early.
     printf '%s' "${t//[$'\n\r']/}"
 }
 
@@ -3135,6 +3153,7 @@ configure_omarchy() {
     omarchy_hypr
     omarchy_terminal_font
     omarchy_default_agent
+    omarchy_mise_quiet
     omarchy_restart_shell
 
     return 0
@@ -3654,6 +3673,55 @@ omarchy_default_agent() {
     printf '%s\n' "$OMARCHY_DEFAULT_AGENT" > "$f"
     ok "default agent set to $OMARCHY_DEFAULT_AGENT"
     report "Omarchy" "default agent $OMARCHY_DEFAULT_AGENT"
+}
+
+# Stop mise's tool wrappers printing a status banner to stdout.
+#
+# Omarchy writes ~/.local/bin/<tool> for every mise-managed tool (claude, codex,
+# gh, opencode...), and each one runs `mise use -g <tool>` before exec'ing the
+# real binary. That command prints "mise <config> tools: <tool>@<version>" — on
+# STDOUT, ahead of the output the caller asked for. So on a stock Omarchy box
+# every `t="$(gh auth token)"` in every script on the machine captures the
+# banner as part of the value. This script's own github_token() is hardened
+# against it, but it is far from the only caller, and the fix is one setting.
+#
+# `quiet` silences mise's informational output only; errors still print.
+omarchy_mise_quiet() {
+    local conf="$HOME/.config/mise/config.toml"
+
+    have mise || return 0
+    [[ -f "$conf" ]] || { skip "no mise config to quieten"; return 0; }
+
+    if grep -qE '^[[:space:]]*quiet[[:space:]]*=' "$conf"; then
+        skip "mise already has a quiet setting"
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "set quiet = true under [settings] in $conf"
+        report "Omarchy" "would quieten mise's tool wrappers"
+        return 0
+    fi
+
+    # TOML forbids the same table twice, so an existing [settings] gets the key
+    # inserted into it rather than a second section appended after it.
+    if grep -qE '^[[:space:]]*\[settings\][[:space:]]*$' "$conf"; then
+        local tmp; tmp="$(mktemp)"
+        awk '
+            { print }
+            !done && /^[[:space:]]*\[settings\][[:space:]]*$/ {
+                print "# Silences the \"mise <config> tools: ...\" banner that Omarchy'"'"'s"
+                print "# ~/.local/bin wrappers print to STDOUT before every command."
+                print "quiet = true"
+                done = 1
+            }' "$conf" > "$tmp"
+        mv "$tmp" "$conf"
+    else
+        printf '\n[settings]\n# Silences the "mise <config> tools: ..." banner that Omarchy'"'"'s\n# ~/.local/bin wrappers print to STDOUT before every command.\nquiet = true\n' >> "$conf"
+    fi
+
+    ok "mise's tool wrappers no longer print a banner over their output"
+    report "Omarchy" "mise banner silenced"
 }
 
 # One restart at the end instead of one per change.
