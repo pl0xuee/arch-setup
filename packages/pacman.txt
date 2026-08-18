@@ -4,9 +4,9 @@
 # already installed.
 #
 # Anything that ISN'T available everywhere lives in a sibling list instead:
-#   pacman-cachyos.txt   only in the CachyOS repos
+#   pacman-cachyos.txt   only in the CachyOS repos — install.sh adds that repo
+#                        on boxes that don't have it, so the list still installs
 #   pacman-kde.txt       only worth installing on KDE Plasma
-#   aur.txt              AUR substitutes, used when the CachyOS repos are absent
 
 # ── Apps ──────────────────────────────────────────────────────────────
 keepassxc                    # Password manager

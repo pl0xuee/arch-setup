@@ -448,17 +448,6 @@ has_cachyos_repos() {
     [[ "$CACHYOS_REPOS" == 1 ]]
 }
 
-# Whichever AUR helper is on PATH. Omarchy ships yay; paru is the other common
-# one. Empty means neither, which is a reason to skip the AUR list, never a
-# reason to fail — see packages/aur.txt.
-aur_helper() {
-    local h
-    for h in yay paru; do
-        have "$h" && { printf '%s' "$h"; return 0; }
-    done
-    return 1
-}
-
 # Set one key in one group of a Qt/KDE-style INI file, creating the file and the
 # group if they aren't there.
 #
@@ -540,9 +529,10 @@ Desktops:
   The desktop is detected, and the steps that only exist on one of them are
   gated on it. On KDE Plasma everything runs. On Omarchy (Arch + Hyprland)
   the Plasma panel and powerdevil steps are skipped — there is no panel to pin
-  to and powerdevil is not what handles idle there — and the packages that
-  only exist in the CachyOS repos are substituted from the AUR where a
-  substitute exists. Everything else is the same on both.
+  to and powerdevil is not what handles idle there. Nothing else differs: the
+  signed [cachyos] repo is added there (below Arch's, so Arch still wins every
+  name collision) and the CachyOS-only packages install as they do anywhere.
+  No AUR helper is used, or needed.
 
 Notes:
   A full system upgrade runs first by default. On Arch-based systems that
@@ -685,6 +675,8 @@ install_packages() {
         run sudo pacman -Syu --noconfirm
     fi
 
+    ensure_cachyos_repo
+
     local pkgs=() extra=()
     mapfile -t pkgs < <(read_list "$PKG_DIR/pacman.txt")
 
@@ -700,8 +692,10 @@ install_packages() {
             if has_cachyos_repos; then
                 pkgs+=("${extra[@]}")
             else
+                # Only reachable when ensure_cachyos_repo could not add the repo
+                # — it already said why, so this just records the consequence.
                 skip "no CachyOS repos — skipping ${#extra[@]} CachyOS-only packages"
-                report "Packages" "skipped (no CachyOS repos): ${extra[*]}"
+                report "Packages" "skipped (CachyOS repo unavailable): ${extra[*]}"
             fi
         fi
     fi
@@ -728,7 +722,6 @@ install_packages() {
 
     if [[ $DRY_RUN -eq 1 ]]; then
         run sudo pacman -S --needed --noconfirm "${pkgs[@]}"
-        install_aur_substitutes
         return 0
     fi
 
@@ -764,68 +757,114 @@ install_packages() {
         fi
     fi
 
-    install_aur_substitutes
     return 0
 }
 
-# The three programs in pacman-cachyos.txt that DO exist off CachyOS, built from
-# the AUR instead. Only reached when the CachyOS repos are absent — on CachyOS
-# the repo builds are the same programs from a signed binary repo, which is
-# strictly better than compiling them here.
+# CachyOS's signing key and repo, for boxes that don't have them — Omarchy is
+# plain Arch, so `pacman -S cachyos-gaming-meta` there has nothing to install
+# from. Adding the repo is what makes the CachyOS-only list work everywhere,
+# and it is the whole reason there is no AUR list here: everything those five
+# packages need is in a signed binary repo, which beats building from unreviewed
+# PKGBUILDs.
 #
-# Nothing in here is allowed to fail the run:
-#   no helper      skip with a warning. An AUR helper is a choice about how much
-#                  unreviewed build scripts you'll run on your machine, and a
-#                  post-install script has no business overruling it.
-#   a build fails  warn and carry on. Losing Brave is bad; losing the eight
-#                  steps after this one because Brave's build broke is worse.
-install_aur_substitutes() {
-    local list="$PKG_DIR/aur.txt"
+# The key detail is WHERE the repo goes, and it is worth being emphatic about.
+#
+# CachyOS's own cachyos-repo.sh inserts [cachyos] ABOVE core/extra/multilib (and
+# switches Architecture to auto, pulling the v3/v4 repos as well). That is right
+# for CachyOS, where the optimised rebuilds are the entire point. It is very
+# wrong here: the cachyos repo shares 90 package names with Arch's, among them
+# pacman, mesa, linux-firmware, mkinitcpio, sddm, xz and zstd. Ordered first, the
+# next `pacman -Syu` — which omarchy-update runs on its own — starts replacing
+# Omarchy's base system with CachyOS builds. That is a conversion, not a package
+# source, and nobody asked for it.
+#
+# So the section is APPENDED, landing after every existing repo. Pacman resolves
+# a name from the first repo that has it, so Arch wins every one of those 90
+# collisions and the only things that come from here are the ones Arch does not
+# carry at all: the two gaming metapackages, brave-origin-bin, vesktop,
+# protonup-qt, and the proton/wine/heroic builds they depend on.
+CACHYOS_KEY="F3B607488DB35A47"
+CACHYOS_KEYSERVER="keyserver.ubuntu.com"
+CACHYOS_MIRROR='https://cdn77.cachyos.org/repo/$arch/$repo'
+ensure_cachyos_repo() {
+    has_cachyos_repos && { skip "CachyOS repos already configured"; return 0; }
 
-    # Only worth complaining about where it would have been used: on CachyOS the
-    # repo builds are installed instead and this file is never read at all.
-    has_cachyos_repos && return 0
-    if [[ ! -f "$list" ]]; then
-        warn "missing $list — no AUR substitutes for the CachyOS-only packages"
-        return 0
-    fi
+    local conf="/etc/pacman.conf"
+    local mirrorlist="/etc/pacman.d/cachyos-mirrorlist"
 
-    local aur=()
-    mapfile -t aur < <(read_list "$list")
-    [[ ${#aur[@]} -gt 0 ]] || return 0
-
-    local helper
-    if ! helper="$(aur_helper)"; then
-        warn "no AUR helper (yay or paru) — skipping ${aur[*]}"
-        report "AUR" "SKIPPED (no yay/paru): ${aur[*]}"
-        return 0
-    fi
-
-    info "Installing ${#aur[@]} package(s) from the AUR with $helper..."
-
-    # Both helpers need telling not to stop on the review prompts they show by
-    # default — --noconfirm alone does NOT cover those, and the run would hang
-    # forever on "Diffs to show?" with nobody at the keyboard.
-    local args=(-S --needed --noconfirm)
-    case "$helper" in
-        yay)  args+=(--answerdiff=None --answerclean=None --answeredit=None --removemake) ;;
-        paru) args+=(--skipreview --removemake) ;;
-    esac
+    info "No CachyOS repos — adding them so the CachyOS-only packages can install..."
 
     if [[ $DRY_RUN -eq 1 ]]; then
-        run "$helper" "${args[@]}" "${aur[@]}"
-        report "AUR" "would build ${aur[*]} with $helper"
+        run "sudo pacman-key --recv-keys $CACHYOS_KEY --keyserver $CACHYOS_KEYSERVER"
+        run "sudo pacman-key --lsign-key $CACHYOS_KEY"
+        run "sudo write $mirrorlist"
+        run "sudo append [cachyos] to $conf (AFTER core/extra/multilib, so Arch wins every name collision)"
+        run "sudo pacman -Sy"
+        report "CachyOS repo" "would add the signed [cachyos] repo, ordered below Arch's"
+        # A dry run has to predict the real run. Without this the CachyOS-only
+        # list is reported as skipped — true of the dry run, which changed
+        # nothing, but the opposite of what a real run does two lines later.
+        CACHYOS_REPOS=1
         return 0
     fi
 
-    # NOT under sudo: both helpers refuse to run as root, and they call sudo
-    # themselves for the pacman half — which preflight has already cached.
-    if "$helper" "${args[@]}" "${aur[@]}"; then
-        ok "AUR packages installed (${aur[*]})"
-        report "AUR" "${aur[*]} built with $helper"
+    # The key first. If this fails nothing has been touched yet, which is the
+    # point of doing it first: a pacman.conf naming a repo whose packages can't
+    # be verified makes every later pacman call fail, including the ones that
+    # would fix it.
+    if ! sudo pacman-key --recv-keys "$CACHYOS_KEY" --keyserver "$CACHYOS_KEYSERVER" >/dev/null 2>&1; then
+        warn "couldn't fetch CachyOS's signing key from $CACHYOS_KEYSERVER — leaving pacman.conf alone"
+        report "CachyOS repo" "FAILED (no signing key) — the CachyOS-only packages will be skipped"
+        return 0
+    fi
+    if ! sudo pacman-key --lsign-key "$CACHYOS_KEY" >/dev/null 2>&1; then
+        warn "couldn't locally sign CachyOS's key — leaving pacman.conf alone"
+        report "CachyOS repo" "FAILED (key not signed) — the CachyOS-only packages will be skipped"
+        return 0
+    fi
+
+    # One mirror, not the full generated list. This is a bootstrap: the real
+    # cachyos-mirrorlist package is installed from the repo below and overwrites
+    # this file with the maintained list.
+    printf '# Bootstrapped by cachyos-setup; replaced by the cachyos-mirrorlist package.\nServer = %s\n' \
+        "$CACHYOS_MIRROR" | sudo tee "$mirrorlist" >/dev/null
+
+    sudo cp -n "$conf" "$conf.before-cachyos-setup" 2>/dev/null || true
+
+    # multilib before cachyos, because cachyos-gaming-applications pulls steam
+    # and lib32-mangohud and pacman fails the whole transaction without them.
+    # Uncommented in place, so it keeps its position above the appended section.
+    if ! pacman-conf --repo-list 2>/dev/null | grep -qx multilib; then
+        info "Enabling the multilib repo (Steam and the lib32 packages live there)..."
+        sudo sed -i 's/^#\[multilib\]$/[multilib]/; /^\[multilib\]$/{n; s|^#Include = /etc/pacman.d/mirrorlist$|Include = /etc/pacman.d/mirrorlist|}' "$conf"
+        pacman-conf --repo-list 2>/dev/null | grep -qx multilib \
+            || warn "couldn't enable multilib — Steam and the lib32 packages will be skipped"
+    fi
+
+    printf '\n# Added by cachyos-setup. Deliberately LAST: pacman takes a package from the\n# first repo that has it, so every name Arch also carries still comes from Arch.\n[cachyos]\nInclude = %s\n' \
+        "$mirrorlist" | sudo tee -a "$conf" >/dev/null
+
+    if ! sudo pacman -Sy >/dev/null 2>&1; then
+        warn "pacman couldn't sync the new CachyOS repo — restoring $conf"
+        sudo cp "$conf.before-cachyos-setup" "$conf" 2>/dev/null || true
+        report "CachyOS repo" "FAILED (sync) — pacman.conf restored"
+        CACHYOS_REPOS=""
+        return 0
+    fi
+
+    # Hand the mirrorlist and keyring over to their real packages, so they are
+    # tracked and updated like anything else rather than frozen at whatever this
+    # script wrote today.
+    sudo pacman -S --needed --noconfirm cachyos-keyring cachyos-mirrorlist >/dev/null 2>&1 \
+        || warn "couldn't install cachyos-keyring/cachyos-mirrorlist — the repo works, but won't self-update"
+
+    CACHYOS_REPOS=""          # re-detect: has_cachyos_repos cached the old answer
+    if has_cachyos_repos; then
+        ok "CachyOS repo added, ordered below Arch's (Arch wins every name collision)"
+        report "CachyOS repo" "[cachyos] added below core/extra/multilib"
     else
-        warn "$helper couldn't install one or more of: ${aur[*]} — install them by hand"
-        report "AUR" "FAILED (${aur[*]}) — install by hand"
+        warn "added [cachyos] but pacman still doesn't list it — check $conf"
+        report "CachyOS repo" "added but not visible to pacman — check $conf"
     fi
     return 0
 }

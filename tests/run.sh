@@ -249,7 +249,7 @@ fi
 # ("this name is NOT in that list"), which an empty array satisfies — so without
 # this, a list file that was never committed makes the suite go green for
 # precisely the deployment it would break.
-for f in pacman-cachyos pacman-kde aur; do
+for f in pacman-cachyos pacman-kde; do
     if [[ -f "$REPO_ROOT/packages/$f.txt" ]]; then
         pass "packages/$f.txt exists"
     else
@@ -312,17 +312,6 @@ else
          "these would break the whole transaction on Arch: ${leaked[*]}"
 fi
 
-# The gaming metapackages must NOT be in the AUR list — nothing in the AUR
-# provides them. Names are not compared against pacman-cachyos.txt, because a
-# substitute is deliberately a DIFFERENT package (brave-bin stands in for
-# brave-origin-bin); what matters is only that each name really exists, since
-# yay fails the whole batch on one that doesn't.
-mapfile -t aur_pkgs < <(read_list "$REPO_ROOT/packages/aur.txt")
-if printf '%s\n' "${aur_pkgs[@]}" | grep -q '^cachyos-'; then
-    fail "aur.txt lists no cachyos-* package" "those exist only in the CachyOS repos"
-else
-    pass "aur.txt lists no cachyos-* package"
-fi
 
 # AgentTileCLI's own install.sh preflights every one of these with pkg-config
 # (rust as cargo) and refuses to build without them. None can be assumed on a
@@ -405,35 +394,76 @@ else
     printf '  %s·%s no CachyOS repos here — skipping the CachyOS-only package check\n' "$DIM" "$RESET"
 fi
 
-# The AUR names are the only thing standing between Omarchy and no browser, and
-# they are the likeliest of all these lists to rot: AUR packages get renamed and
-# deleted by their maintainers, with nothing in this repo to notice. yay fails
-# the whole batch on one bad name, so a rename takes all three down, not just
-# the renamed one.
-if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
-    aur_query=""
-    for p in "${aur_pkgs[@]}"; do aur_query+="&arg[]=$p"; done
-    aur_found="$(curl -fsS --max-time 15 "https://aur.archlinux.org/rpc/v5/info?${aur_query#&}" 2>/dev/null \
-                 | python -c 'import json,sys
-try:
-    print("\n".join(r["Name"] for r in json.load(sys.stdin).get("results", [])))
-except Exception:
-    pass' || true)"
-    if [[ -z "$aur_found" ]]; then
-        printf '  %s·%s AUR unreachable — skipping the AUR name check\n' "$DIM" "$RESET"
-    else
-        gone=()
-        for p in "${aur_pkgs[@]}"; do
-            grep -qxF "$p" <<<"$aur_found" || gone+=("$p")
-        done
-        if [[ ${#gone[@]} -eq 0 ]]; then
-            pass "all ${#aur_pkgs[@]} aur.txt names still exist in the AUR"
-        else
-            fail "all aur.txt names still exist in the AUR" \
-                 "yay fails the whole batch on these: ${gone[*]}"
-        fi
-    fi
+# ── the CachyOS repo bootstrap ────────────────────────────────────────────────
+group "CachyOS repo bootstrap"
+
+# THE property that makes this safe. CachyOS's own cachyos-repo.sh inserts
+# [cachyos] above core/extra/multilib; the plain cachyos repo shares 90 package
+# names with Arch's, including pacman, mesa, linux-firmware, mkinitcpio, sddm,
+# xz and zstd. Ordered first, the next `pacman -Syu` — which omarchy-update runs
+# by itself — starts replacing Omarchy's base system with CachyOS builds.
+# Appending is what keeps Arch winning every one of those collisions, so a
+# refactor that "tidies" this into an insert has to fail loudly.
+fn="$(awk '/^ensure_cachyos_repo\(\)/,/^}/' "$SCRIPT")"
+if grep -q 'tee -a "\$conf"' <<<"$fn"; then
+    pass "the [cachyos] section is APPENDED, so it lands below Arch's repos"
+else
+    fail "the [cachyos] section is appended" \
+         "inserted above core/extra, CachyOS would replace pacman, mesa and linux-firmware"
 fi
+if grep -qE 'pacman-key --lsign-key' <<<"$fn"; then
+    pass "the signing key is locally signed before the repo is used"
+else
+    fail "the signing key is locally signed" "pacman refuses packages from an unsigned key"
+fi
+
+# The key must be imported BEFORE pacman.conf is touched. A pacman.conf naming a
+# repo whose packages can't be verified breaks every later pacman call —
+# including the ones that would undo it.
+if [[ "$(grep -n 'pacman-key --recv-keys' <<<"$fn" | head -1 | cut -d: -f1)" -lt \
+      "$(grep -n 'tee -a "\$conf"'          <<<"$fn" | head -1 | cut -d: -f1)" ]]; then
+    pass "the key is imported before pacman.conf is edited"
+else
+    fail "the key is imported before pacman.conf is edited" \
+         "a failed key import would leave a pacman.conf that breaks every later pacman call"
+fi
+
+# It must not touch a box that already has the repos — this is your machine.
+out="$( has_cachyos_repos() { return 0; }; DRY_RUN=1; ensure_cachyos_repo 2>&1 )"
+check_contains "it no-ops where the repos already exist" "already configured" "$out"
+if grep -q 'dry-run' <<<"$out"; then
+    fail "it no-ops where the repos already exist" "it still proposed changes"
+else
+    pass "it proposes no changes where the repos already exist"
+fi
+
+# ...and a dry run must not touch pacman.conf even where they don't.
+conf_before="$(sha256sum /etc/pacman.conf)"
+( has_cachyos_repos() { return 1; }; DRY_RUN=1; ensure_cachyos_repo ) >/dev/null 2>&1
+check_eq "a dry run leaves /etc/pacman.conf untouched" "$conf_before" "$(sha256sum /etc/pacman.conf)"
+
+# A dry run must predict the real run. The repo is added before the lists are
+# consulted, so a dry run that reported the CachyOS-only packages as skipped
+# would be describing itself rather than the install it stands in for.
+out="$( has_cachyos_repos() { [[ "$CACHYOS_REPOS" == 1 ]]; }
+        DRY_RUN=1 SKIP_UPGRADE=1 DESKTOP=omarchy CACHYOS_REPOS=0
+        install_packages 2>&1 )"
+check_contains "a dry run without the repos still shows Brave installing" "brave-origin-bin" "$out"
+check_contains "...and the gaming metapackages"  "cachyos-gaming-meta" "$out"
+
+# The gaming metapackages need steam and lib32-mangohud, which are multilib.
+# pacman fails the whole transaction on an unsatisfiable dependency, so the
+# repo being present is not enough on its own.
+if grep -q 'multilib' <<<"$fn"; then
+    pass "multilib is enabled too (steam and the lib32 packages live there)"
+else
+    fail "multilib is enabled too" "cachyos-gaming-applications can't resolve steam without it"
+fi
+
+# The key fingerprint is the one thing here that must not be guessed: it is what
+# every package from this repo is verified against.
+check_contains "the pinned key is CachyOS's published one" "F3B607488DB35A47" \
+    "$(grep '^CACHYOS_KEY=' "$SCRIPT")"
 
 # ── desktop detection ─────────────────────────────────────────────────────────
 group "Desktop detection"
@@ -547,11 +577,11 @@ done
 
 if ( set -e
      DESKTOP=omarchy DRY_RUN=1 SKIP_UPGRADE=1
-     has_cachyos_repos() { return 1; }; aur_helper() { return 1; }
+     has_cachyos_repos() { return 1; }
      wanted packages && install_packages ) >/dev/null 2>&1; then
-    pass "install_packages returns 0 with no CachyOS repos and no AUR helper"
+    pass "install_packages returns 0 when the CachyOS repo couldn't be added"
 else
-    fail "install_packages returns 0 with no CachyOS repos and no AUR helper" \
+    fail "install_packages returns 0 when the CachyOS repo couldn't be added" \
          "set -e would kill the run before any other step"
 fi
 
@@ -569,7 +599,7 @@ check_contains "the taskbar step says why it skipped" "no Plasma panel" "$out"
 # ── the Brave profile directory follows the Brave that's installed ────────────
 group "Brave profile directory"
 
-# brave-origin-bin (CachyOS) and brave-bin (AUR, what Omarchy would get) are
+# brave-origin-bin (CachyOS) and upstream brave-bin are
 # different builds with different profile directories. Writing the filter lists
 # and the KeePassXC manifest into the wrong one is silent: no error, no effect,
 # and the extension simply never reaches the database.
