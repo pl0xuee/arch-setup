@@ -130,6 +130,38 @@ the host's `source:`-based Loader can't set
 ([#6915](https://github.com/basecamp/omarchy/issues/6915)). Without it, cloning
 the bar leaves you with no bar and no error.
 
+## Network shares
+
+SMB/CIFS shares are mounted at boot, but none of the details are in this repo.
+A server address, a login name and a list of share names are facts about one
+house — the repo carries the mechanism, the machine carries the values.
+
+The first run with a terminal attached asks for the server, username and
+password, lists the shares it can see, and writes two files:
+
+| File | Holds | Mode |
+|---|---|---|
+| `~/.config/arch-setup/smb.conf` | host, user, and `share -> mount point` list | `0600`, yours |
+| `/etc/samba/creds-nas` | username and password | `0600`, root's |
+
+Neither is in the repo, and the password is in neither the config nor
+`/etc/fstab` — that gets `credentials=` pointing at the root-only file, because
+`/etc/fstab` is world-readable. Every run after the first reads `smb.conf` and
+asks nothing.
+
+Shares whose names end in `$` are skipped: `ADMIN$`, `IPC$`, `C$` and the rest
+are the administrative shares every Windows box exports, not the ones anyone
+means. Mount points are `/mnt/<share name with spaces removed>`; a space in the
+share name itself becomes `\040` in `fstab`, which is the only place it is
+allowed to appear.
+
+Mounts are `nofail`, `_netdev` and `x-systemd.device-timeout=10`, so a server
+that is switched off — or a laptop somewhere else entirely — costs ten seconds
+and a warning rather than a failed boot.
+
+To change what is mounted, edit `smb.conf` and re-run. To be asked everything
+again, delete it.
+
 ## What goes where
 
 | File | |
@@ -143,4 +175,5 @@ the bar leaves you with no bar and no error.
 | `omarchy/patches/` | diffs applied to the cloned Omarchy bar and tray plugins |
 | `omarchy/hypr/` | window rules, input and monitor layout, installed into `~/.config/hypr/` |
 | `omarchy/backgrounds/<theme>/` | wallpapers installed into that theme's user folder |
+| `~/.config/arch-setup/smb.conf` | network share settings — **outside the repo**, written on first run |
 | `install.sh` | panel height, tray, homepage, power profile, every Omarchy setting — as variables at the top |

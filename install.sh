@@ -187,6 +187,37 @@ TRAY_HIDDEN=(
     org.kde.plasma.keyboardindicator
 )
 
+# ── Network shares ────────────────────────────────────────────────────────────
+#
+# Deliberately empty. A server address, a login name and a share list are facts
+# about one house, not settings anyone else should inherit from a public repo,
+# so none of them live here — this file carries the mechanism and the machine
+# carries the values.
+#
+# Everything personal ends up in two places, both outside the repo:
+#
+#   ~/.config/arch-setup/smb.conf   host, user, share -> mount-point list
+#   /etc/samba/creds-nas            username + password, root-owned, mode 600
+#
+# The first run with a terminal attached asks for the three things it cannot
+# guess, writes both files, and never asks again. A run with no terminal (CI, a
+# pipe with stdin closed) skips the step and says so, rather than hanging on a
+# prompt nobody can answer.
+#
+# The password never reaches smb.conf, the repo, or /etc/fstab. fstab is
+# world-readable, so it gets `credentials=` pointing at the root-only file
+# instead of the password itself.
+SMB_CONFIG="${SMB_CONFIG:-$HOME/.config/arch-setup/smb.conf}"
+SMB_CREDS="${SMB_CREDS:-/etc/samba/creds-nas}"
+
+# nofail so a server that is off, or a laptop away from home, cannot fail the
+# boot; _netdev so the mount is not attempted before the network is up; and
+# device-timeout so an unreachable host costs ten seconds rather than systemd's
+# ninety-second default. uid/gid hand the files to the human who logs in —
+# without them a CIFS mount with no unix extensions lands as root and is
+# read-only to everyone else.
+SMB_MOUNT_OPTS="uid=1000,gid=1000,file_mode=0664,dir_mode=0775,iocharset=utf8,mfsymlinks,noatime,_netdev,nofail,x-systemd.device-timeout=10,x-gvfs-show"
+
 # ── Omarchy desktop ───────────────────────────────────────────────────────────
 #
 # Omarchy-only settings, applied by configure_omarchy() and skipped on every
@@ -2527,6 +2558,187 @@ EOF
 }
 
 # ── 12. system config ─────────────────────────────────────────────────────────
+# ── network shares ────────────────────────────────────────────────────────────
+#
+# Mount SMB/CIFS shares at boot, from settings that live on the machine rather
+# than in this repo. See the SMB_* block near the top for why, and for what ends
+# up where.
+#
+# Asking is confined to the first run: after that ~/.config/arch-setup/smb.conf
+# answers every question, so a re-run is as silent as the rest of the script.
+smb_ask() {
+    local host user pass reply line name
+    local -a found=() chosen=()
+
+    printf '\n   %sNetwork shares%s\n' "$BOLD" "$RESET"
+    printf '   Nothing here is stored in the repo. Leave the server blank to skip.\n\n'
+
+    printf '   Server (name or address): '
+    read -r host </dev/tty || return 1
+    [[ -n "$host" ]] || { info "  no server given — network shares left alone"; return 1; }
+
+    printf '   Username: '
+    read -r user </dev/tty || return 1
+    [[ -n "$user" ]] || { warn "no username given — network shares left alone"; return 1; }
+
+    # No echo, and read straight from the terminal: the password must not land in
+    # the scrollback, and on a curl|bash run stdin is the pipe, not the keyboard.
+    printf '   Password: '
+    stty -echo </dev/tty 2>/dev/null || true
+    read -r pass </dev/tty || { stty echo </dev/tty 2>/dev/null || true; return 1; }
+    stty echo </dev/tty 2>/dev/null || true
+    printf '\n\n'
+
+    # Written before the share list is fetched, because fetching it needs these
+    # credentials. install(1) rather than a redirect: the file is created 0600
+    # and root-owned in one step, so there is no instant where a password sits in
+    # a world-readable file.
+    sudo install -d -m 755 "$(dirname "$SMB_CREDS")" || return 1
+    printf 'username=%s\npassword=%s\n' "$user" "$pass" |
+        sudo install -m 600 /dev/stdin "$SMB_CREDS" || {
+            warn "couldn't write $SMB_CREDS — network shares left alone"
+            return 1
+        }
+    unset pass
+
+    # -g is the parseable form (Disk|Name|Comment). Shares ending in $ are the
+    # administrative ones every Windows box exports — ADMIN$, IPC$, C$ and
+    # friends — which are not what anyone means by "my shares".
+    while IFS='|' read -r kind name _; do
+        [[ "$kind" == "Disk" ]] || continue
+        [[ "$name" == *'$' ]] && continue
+        found+=("$name")
+    done < <(sudo smbclient -L "//$host" -A "$SMB_CREDS" -g 2>/dev/null || true)
+
+    if [[ ${#found[@]} -eq 0 ]]; then
+        warn "no shares readable on //$host as $user — check the address and password"
+        report "Network shares" "FAILED (no shares listed on //$host)"
+        return 1
+    fi
+
+    printf '   Found on //%s:\n' "$host"
+    for name in "${found[@]}"; do
+        printf '     %-24s -> /mnt/%s\n' "$name" "${name// /}"
+    done
+    printf '\n   Mount these at boot? [Y/n] '
+    read -r reply </dev/tty || return 1
+    case "$reply" in
+        [Nn]*) info "  left unmounted — edit $SMB_CONFIG and re-run to change this"; return 1 ;;
+    esac
+
+    for name in "${found[@]}"; do
+        chosen+=("$name:/mnt/${name// /}")
+    done
+
+    mkdir -p "$(dirname "$SMB_CONFIG")"
+    {
+        printf '# Written by arch-setup on first run. Machine-local: never commit this.\n'
+        printf '# The password is not here — it is in %s, root-owned and 0600.\n' "$SMB_CREDS"
+        printf '# Drop a share by deleting its line, then re-run install.sh.\n\n'
+        printf 'SMB_HOST=%q\n' "$host"
+        printf 'SMB_USER=%q\n' "$user"
+        printf 'SMB_SHARES=(\n'
+        for name in "${chosen[@]}"; do printf '    %q\n' "$name"; done
+        printf ')\n'
+    } > "$SMB_CONFIG"
+    chmod 600 "$SMB_CONFIG"
+    ok "wrote $SMB_CONFIG (and $SMB_CREDS, root-only)"
+    return 0
+}
+
+configure_network_shares() {
+    have mount.cifs || {
+        skip "cifs-utils not installed — no network shares mounted"
+        return 0
+    }
+
+    # Declared local first so a config file that sets them updates these rather
+    # than leaking globals, and so ${#SMB_SHARES[@]} is safe under `set -u` when
+    # there is no config file at all.
+    local SMB_HOST="" SMB_USER=""
+    local -a SMB_SHARES=()
+    # shellcheck source=/dev/null
+    [[ -r "$SMB_CONFIG" ]] && . "$SMB_CONFIG"
+
+    if [[ -z "$SMB_HOST" || ${#SMB_SHARES[@]} -eq 0 ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            skip "no $SMB_CONFIG — a real run would ask for the server details"
+            return 0
+        fi
+        # A prompt nobody can answer is a hang, not a question.
+        if [[ ! -t 0 && ! -r /dev/tty ]]; then
+            info "  no $SMB_CONFIG and no terminal to ask on — network shares skipped"
+            report "Network shares" "SKIPPED (not configured, no terminal)"
+            return 0
+        fi
+        smb_ask || return 0
+        . "$SMB_CONFIG"
+    fi
+
+    # -e, not -r: the file is root-only by design, so an unprivileged read test
+    # would always fail, and `sudo test` would prompt for a password mid-run (and
+    # break --dry-run's promise to need none). Existence is visible to everyone.
+    if [[ ! -e "$SMB_CREDS" ]]; then
+        warn "$SMB_CONFIG exists but $SMB_CREDS does not — delete the former and re-run to be asked again"
+        report "Network shares" "FAILED (credentials file missing)"
+        return 0
+    fi
+
+    local entry share mp src backed_up=0 mounted=0
+    for entry in "${SMB_SHARES[@]}"; do
+        share="${entry%%:*}"
+        mp="${entry#*:}"
+        # fstab splits fields on whitespace, so a space in a share name has to be
+        # \040 there. The mount point simply doesn't get one.
+        src="//$SMB_HOST/${share// /\\040}"
+
+        run sudo mkdir -p "$mp"
+
+        if grep -qE "[[:space:]]${mp}[[:space:]]" /etc/fstab 2>/dev/null; then
+            skip "$mp already in /etc/fstab"
+        else
+            if [[ $backed_up -eq 0 ]]; then
+                run sudo cp -a /etc/fstab "/etc/fstab.bak.$(date +%s)"
+                backed_up=1
+            fi
+            # credentials= rather than the password itself: /etc/fstab is
+            # world-readable and $SMB_CREDS is not.
+            if [[ $DRY_RUN -eq 1 ]]; then
+                printf '   %s[dry-run]%s append to /etc/fstab: %s %s cifs\n' \
+                    "$YELLOW" "$RESET" "$src" "$mp"
+            else
+                printf '%s\t%s\tcifs\tcredentials=%s,%s\t0 0\n' \
+                    "$src" "$mp" "$SMB_CREDS" "$SMB_MOUNT_OPTS" |
+                    sudo tee -a /etc/fstab >/dev/null
+            fi
+            ok "$mp added to /etc/fstab"
+        fi
+    done
+
+    run sudo systemctl daemon-reload
+
+    for entry in "${SMB_SHARES[@]}"; do
+        mp="${entry#*:}"
+        if [[ $DRY_RUN -eq 1 ]]; then
+            printf '   %s[dry-run]%s mount %s\n' "$YELLOW" "$RESET" "$mp"
+            continue
+        fi
+        if mountpoint -q "$mp"; then
+            skip "$mp already mounted"
+            mounted=$((mounted + 1))
+        elif sudo mount "$mp" >/dev/null 2>&1; then
+            ok "mounted $mp"
+            mounted=$((mounted + 1))
+        else
+            # nofail is in the options, so this costs nothing at boot — it just
+            # means the server isn't answering right now.
+            warn "couldn't mount $mp — server unreachable? (nofail, so boot is unaffected)"
+        fi
+    done
+
+    [[ $DRY_RUN -eq 1 ]] || report "Network shares" "$mounted of ${#SMB_SHARES[@]} mounted from //$SMB_HOST"
+}
+
 configure_system() {
     step "System config"
 
@@ -2555,6 +2767,7 @@ configure_system() {
     configure_brave_extensions
     configure_keepassxc_browser
     configure_taskbar
+    configure_network_shares
 }
 
 # Auto-install Brave extensions via Chromium enterprise policy.

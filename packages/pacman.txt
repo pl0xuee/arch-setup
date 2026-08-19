@@ -78,6 +78,7 @@ lib32-vulkan-radeon          # 32-bit RADV — every 32-bit game under Proton ne
 # to generate and render its wallpapers. kscreen and qt6-imageformats came from
 # there too and moved to pacman-kde.txt — both are Plasma-only in practice.
 rsync
+cifs-utils                  # mount SMB/CIFS network shares
 
 # ── Optional extras ───────────────────────────────────────────────────
 # Currently on your machine but not in the list you gave me. Uncomment
