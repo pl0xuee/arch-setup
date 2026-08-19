@@ -3652,6 +3652,24 @@ omarchy_hypr() {
             have systemctl && systemctl --user set-environment "GDK_SCALE=$gdk_scale" >/dev/null 2>&1 || true
             have dbus-update-activation-environment &&
                 dbus-update-activation-environment --systemd "GDK_SCALE=$gdk_scale" >/dev/null 2>&1 || true
+
+            # Those two only decide what a *new* systemd unit inherits, and the
+            # Omarchy shell is not new: it is a long-lived process that was
+            # handed its environment when it spawned, and a menu launch is its
+            # own child by way of gtk-launch. So an app started from the menu
+            # keeps whatever GDK_SCALE the shell was born with, however many
+            # times this script pushes a corrected one -- which is how a scale
+            # can look applied everywhere except the single place apps are
+            # actually started from, and why a fix that tests clean from a
+            # terminal appears not to have stuck.
+            #
+            # Measured on a session where systemd already reported 1: the shell
+            # still held 2, and the app it launched twelve seconds later came up
+            # at 2. Only a restart reaches it -- omarchy-restart-shell respawns
+            # the shell from Hyprland, so it reads the environment the reload
+            # above just installed.
+            OMARCHY_SHELL_DIRTY=1
+
             info "  GDK_SCALE=$gdk_scale pushed to the running session — apps already open keep the old one"
         fi
     elif [[ $DRY_RUN -eq 0 ]]; then
