@@ -3639,6 +3639,21 @@ omarchy_hypr() {
         if [[ -n "$errors" && "$errors" != *"no errors"* ]]; then
             warn "Hyprland reported config errors after the reload: $errors"
         fi
+
+        # The reload puts hl.env into Hyprland's own environment, but that is not
+        # where launched apps get theirs: the menu hands them to uwsm, and uwsm
+        # to systemd's user manager, whose environment was captured at login.
+        # Push the scale into both so it applies to this session instead of the
+        # next one. Read back out of the rules file, so the number lives in one
+        # place.
+        local gdk_scale
+        gdk_scale="$(sed -n 's/^hl\.env("GDK_SCALE", "\([0-9.]*\)").*/\1/p' "$src" 2>/dev/null | tail -1)"
+        if [[ -n "$gdk_scale" ]]; then
+            have systemctl && systemctl --user set-environment "GDK_SCALE=$gdk_scale" >/dev/null 2>&1 || true
+            have dbus-update-activation-environment &&
+                dbus-update-activation-environment --systemd "GDK_SCALE=$gdk_scale" >/dev/null 2>&1 || true
+            info "  GDK_SCALE=$gdk_scale pushed to the running session — apps already open keep the old one"
+        fi
     elif [[ $DRY_RUN -eq 0 ]]; then
         info "  Hyprland isn't running here — the config applies at next login"
     fi

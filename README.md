@@ -98,6 +98,7 @@ by piece. What it sets:
 | **Tray drawer** | `omarchy.tray` cloned to `<user>.tray` and patched so the collapsed drawer stops holding width open for its hidden icons — otherwise the right island always carries a blank tail. |
 | **Theme and wallpaper** | The `solitude` theme, plus the wallpapers in `omarchy/backgrounds/solitude/`, one of them selected. |
 | **Hyprland** | Window rules (Steam tiles, StreamHub stays opaque), the session PATH fix that keeps `~/.local/bin` ahead of `/usr/bin`, flat mouse acceleration, and this machine's monitor layout. |
+| **X11 app scale** | `GDK_SCALE=1`, over the 2 Omarchy sets for the HiDPI laptop its default is written for. The variable reaches XWayland clients only — Wayland apps take their scale from the compositor — and at 2 every X11 client drew at twice the size it asked for, the Tauri AppImages above worst of all, since their packaging forces them onto X11. Exact on a monitor at scale 1 and 20% small on one at 1.25; GTK on X11 has no fractional step in between. Pushed into the running session as well as the config, so it applies without a re-login. |
 | **Terminal** | foot's font size. |
 | **Agent** | Omarchy's default agent, so its first-update invitation never fires. |
 
