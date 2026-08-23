@@ -2135,14 +2135,18 @@ else
 fi
 
 # The background named in install.sh has to be one of the files this repo
-# actually carries, or the step warns and leaves the stock wallpaper up.
+# actually carries, or the step warns and leaves the stock wallpaper up. Either
+# of the two places it can be carried counts, the same two omarchy_background
+# looks in: loose under omarchy/backgrounds/<theme>/, or inside a vendored
+# theme's own backgrounds/, which is where a self-contained theme keeps them.
 if [[ -z "$OMARCHY_BACKGROUND" ]]; then
     pass "no background pinned — nothing to vendor"
-elif [[ -f "$REPO_ROOT/omarchy/backgrounds/$OMARCHY_THEME/$OMARCHY_BACKGROUND" ]]; then
+elif [[ -f "$REPO_ROOT/omarchy/backgrounds/$OMARCHY_THEME/$OMARCHY_BACKGROUND" \
+     || -f "$REPO_ROOT/omarchy/themes/$OMARCHY_THEME/backgrounds/$OMARCHY_BACKGROUND" ]]; then
     pass "the pinned background is vendored for the $OMARCHY_THEME theme"
 else
     fail "the pinned background is vendored for the $OMARCHY_THEME theme" \
-         "OMARCHY_BACKGROUND names a file that isn't in omarchy/backgrounds/$OMARCHY_THEME/"
+         "OMARCHY_BACKGROUND is in neither omarchy/backgrounds/$OMARCHY_THEME/ nor omarchy/themes/$OMARCHY_THEME/backgrounds/"
 fi
 
 # Hyprland rules live in a file this repo owns, loaded by one dofile line, so
@@ -2188,6 +2192,73 @@ if have mise; then
 else
     printf '  %s·%s mise not installed — skipping the banner setting\n' "$DIM" "$RESET"
 fi
+
+# ── vendored themes ───────────────────────────────────────────────────────────
+#
+# The theme is applied by name in the very next step, so if these files don't
+# land first, `omarchy theme set nebula` has nothing to set and the run ends on
+# a warning about a theme that is sitting right there in the repo.
+tf_home="$tmp/tfhome"; mkdir -p "$tf_home"
+( HOME="$tf_home" DESKTOP=omarchy DRY_RUN=0 omarchy_theme_files ) >/dev/null 2>&1
+
+for f in colors.toml hyprland.lua backgrounds/nebula.jpg; do
+    if [[ -f "$tf_home/.config/omarchy/themes/nebula/$f" ]]; then
+        pass "the vendored nebula theme installs $f"
+    else
+        fail "the vendored nebula theme installs $f" "not in ~/.config/omarchy/themes/nebula/"
+    fi
+done
+
+# The rounding is the whole point of the theme carrying its own hyprland.lua —
+# a colors.toml alone gets a generated one with borders and nothing else.
+check_contains "the theme sets a corner radius" "rounding = 14" \
+    "$(cat "$tf_home/.config/omarchy/themes/nebula/hyprland.lua" 2>/dev/null)"
+
+# Re-running must be quiet, or every run reports files it didn't really install.
+out="$( HOME="$tf_home" DESKTOP=omarchy DRY_RUN=0 omarchy_theme_files 2>&1 )"
+check_contains "a second run copies nothing" "already installed" "$out"
+
+# Nothing of the user's own is thrown away — a preview or an extra wallpaper
+# dropped into the theme by hand is theirs.
+printf 'mine\n' > "$tf_home/.config/omarchy/themes/nebula/preview.png"
+( HOME="$tf_home" DESKTOP=omarchy DRY_RUN=0 omarchy_theme_files ) >/dev/null 2>&1
+if [[ -f "$tf_home/.config/omarchy/themes/nebula/preview.png" ]]; then
+    pass "files the repo doesn't carry are left alone"
+else
+    fail "files the repo doesn't carry are left alone" "the step deleted preview.png"
+fi
+
+tf2_home="$tmp/tfhome2"; mkdir -p "$tf2_home"
+( HOME="$tf2_home" DESKTOP=omarchy DRY_RUN=1 omarchy_theme_files ) >/dev/null 2>&1
+if [[ -e "$tf2_home/.config/omarchy/themes" ]]; then
+    fail "a dry run installs no theme" "the files were copied anyway"
+else
+    pass "a dry run installs no theme"
+fi
+
+# The wallpaper lives in the theme's own backgrounds/, not in
+# omarchy/backgrounds/<theme>/, so the selection half of omarchy_background has
+# to keep going after finding nothing vendored under that name.
+bg_home="$tmp/bghome"; mkdir -p "$bg_home"
+( HOME="$bg_home" DESKTOP=omarchy DRY_RUN=0 omarchy_theme_files ) >/dev/null 2>&1
+out="$( HOME="$bg_home" DESKTOP=omarchy DRY_RUN=1 \
+        OMARCHY_THEME=nebula OMARCHY_BACKGROUND=nebula.jpg omarchy_background 2>&1 )"
+check_contains "the background is selected from the theme's own folder" \
+    "themes/nebula/backgrounds/nebula.jpg" "$out"
+
+# Applying a theme symlinks the current background out of the copy under
+# ~/.local/state, never out of the folder the file was installed to, so a path
+# comparison alone always says "not set yet" and re-sets the wallpaper on every
+# single run.
+mkdir -p "$bg_home/.local/state/omarchy/current/theme/backgrounds"
+cp "$bg_home/.config/omarchy/themes/nebula/backgrounds/nebula.jpg" \
+   "$bg_home/.local/state/omarchy/current/theme/backgrounds/nebula.jpg"
+ln -sfn "$bg_home/.local/state/omarchy/current/theme/backgrounds/nebula.jpg" \
+        "$bg_home/.local/state/omarchy/current/background"
+out="$( HOME="$bg_home" DESKTOP=omarchy DRY_RUN=1 \
+        OMARCHY_THEME=nebula OMARCHY_BACKGROUND=nebula.jpg omarchy_background 2>&1 )"
+check_contains "the wallpaper isn't re-set when it's already up" \
+    "background already nebula.jpg" "$out"
 
 out="$(HOME="$tmp/omonly" bash "$SCRIPT" --only omarchy --dry-run 2>&1)"; rc=$?
 check_eq "--only omarchy is a valid step" "0" "$rc"
