@@ -2260,6 +2260,112 @@ out="$( HOME="$bg_home" DESKTOP=omarchy DRY_RUN=1 \
 check_contains "the wallpaper isn't re-set when it's already up" \
     "background already nebula.jpg" "$out"
 
+# ── foot alpha ────────────────────────────────────────────────────────────────
+#
+# foot.ini is a file worth hand-editing, and the section alpha belongs in is the
+# same one the theme fills with colours through an include at the top of [main].
+# So the upsert has to be surgical in three different starting shapes.
+fa_write() { mkdir -p "$1/.config/foot"; cat > "$1/.config/foot/foot.ini"; }
+fa_read()  { cat "$1/.config/foot/foot.ini" 2>/dev/null; }
+# ${3-0.85} rather than ${3:-0.85}: an empty third argument is the "no alpha
+# pinned" case and has to reach the function as an empty string, not be
+# swallowed by the default.
+fa_run()   { ( HOME="$1" DESKTOP=omarchy DRY_RUN="${2:-0}" FOOT_ALPHA="${3-0.85}" \
+               omarchy_terminal_alpha ) 2>&1; }
+
+# 1. No [colors-dark] at all — the section is appended.
+fa1="$tmp/fa1"; fa_write "$fa1" <<'INI'
+[main]
+include=~/.local/state/omarchy/current/theme/foot.ini
+font=JetBrainsMono Nerd Font:size=11
+
+[cursor]
+style=block
+INI
+fa_run "$fa1" >/dev/null
+fa="$(fa_read "$fa1")"
+check_contains "a missing [colors-dark] is appended" "[colors-dark]" "$fa"
+check_contains "...with the alpha in it"             "alpha=0.85"    "$fa"
+check_contains "the include is left alone"           "include=~/.local/state" "$fa"
+check_contains "other sections survive"              "style=block"   "$fa"
+
+# The section must land after the include, or the theme's own [colors-dark]
+# overrides it and the terminal stays opaque.
+inc_line="$(grep -n 'include=' <<<"$fa" | cut -d: -f1)"
+sec_line="$(grep -n '^\[colors-dark\]' <<<"$fa" | cut -d: -f1)"
+if [[ -n "$inc_line" && -n "$sec_line" && $sec_line -gt $inc_line ]]; then
+    pass "the alpha section is written after the include"
+else
+    fail "the alpha section is written after the include" \
+         "include at $inc_line, [colors-dark] at $sec_line — the theme would win"
+fi
+
+# 2. [colors-dark] exists with a different alpha — replaced in place, once.
+fa2="$tmp/fa2"; fa_write "$fa2" <<'INI'
+[main]
+font=JetBrainsMono Nerd Font:size=11
+
+[colors-dark]
+alpha=0.95
+background=0a1621
+
+[cursor]
+style=block
+INI
+fa_run "$fa2" >/dev/null
+fa="$(fa_read "$fa2")"
+check_contains "an existing alpha is updated"   "alpha=0.85"      "$fa"
+check_eq "the alpha is written exactly once" "1" "$(grep -c '^alpha=' <<<"$fa")"
+check_contains "sibling keys are left alone"    "background=0a1621" "$fa"
+check_contains "later sections are left alone"  "style=block"     "$fa"
+
+# 3. [colors-dark] exists with no alpha — inserted into that section, not a new one.
+fa3="$tmp/fa3"; fa_write "$fa3" <<'INI'
+[colors-dark]
+background=0a1621
+
+[cursor]
+style=block
+INI
+fa_run "$fa3" >/dev/null
+fa="$(fa_read "$fa3")"
+check_eq "no second [colors-dark] is written" "1" "$(grep -c '^\[colors-dark\]' <<<"$fa")"
+check_contains "the alpha joins the existing section" "alpha=0.85" "$fa"
+if [[ "$(grep -n 'alpha=0.85' <<<"$fa" | cut -d: -f1)" -lt "$(grep -n '^\[cursor\]' <<<"$fa" | cut -d: -f1)" ]]; then
+    pass "the alpha lands inside [colors-dark], not after it"
+else
+    fail "the alpha lands inside [colors-dark], not after it" "it fell into [cursor]"
+fi
+
+# Re-running is quiet, and a dry run writes nothing.
+check_contains "a second run reports no change" "already 0.85" "$(fa_run "$fa2")"
+
+fa4="$tmp/fa4"; fa_write "$fa4" <<'INI'
+[main]
+font=JetBrainsMono Nerd Font:size=11
+INI
+before_fa="$(fa_read "$fa4")"
+fa_run "$fa4" 1 >/dev/null
+check_eq "a dry run changes no foot.ini" "$before_fa" "$(fa_read "$fa4")"
+
+# An empty FOOT_ALPHA means "leave whatever is there", not "write nothing".
+check_contains "an unset alpha is left alone" "left alone" "$(fa_run "$fa4" 0 "")"
+
+# ── blur ──────────────────────────────────────────────────────────────────────
+#
+# The transparency above is only readable because the wallpaper behind it is
+# blurred, and Omarchy ships blur off. The two are set in different files, so
+# nothing but this check ties them together.
+if grep -q "FOOT_ALPHA=" "$SCRIPT" && [[ -n "$FOOT_ALPHA" ]]; then
+    if grep -qE '^\s*enabled = true' "$REPO_ROOT/omarchy/hypr/personal.lua" \
+       && grep -q 'blur' "$REPO_ROOT/omarchy/hypr/personal.lua"; then
+        pass "a transparent terminal comes with blur enabled"
+    else
+        fail "a transparent terminal comes with blur enabled" \
+             "FOOT_ALPHA is set but personal.lua never turns blur on"
+    fi
+fi
+
 out="$(HOME="$tmp/omonly" bash "$SCRIPT" --only omarchy --dry-run 2>&1)"; rc=$?
 check_eq "--only omarchy is a valid step" "0" "$rc"
 check_contains "--only omarchy runs the Omarchy step" "Omarchy desktop" "$out"
