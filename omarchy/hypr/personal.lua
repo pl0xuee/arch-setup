@@ -22,6 +22,35 @@ o.window({ class = "^steam$", title = "^Steam Big Picture Mode$" }, { tile = tru
 -- defaults opt out Steam, QEMU and DaVinci Resolve.
 o.window("^streamhub", { tag = "-default-opacity", opacity = "1 1" })
 
+-- Blur what shows through a translucent window.
+--
+-- foot draws its background at alpha 0.85 (~/.config/foot/foot.ini, set by the
+-- terminal step), so the wallpaper reads straight through the terminal. Omarchy
+-- turns blur off in default/hypr/looknfeel.lua, which leaves every star and
+-- dust lane behind the text competing with it. Blurring the background is what
+-- makes the transparency legible rather than busy.
+--
+-- This is machine look'n'feel, not part of the theme, and it lives here for the
+-- same reason: the alpha it exists to soften is in foot.ini, outside any theme.
+-- Put it in themes/nebula/hyprland.lua instead and switching themes would drop
+-- the blur while leaving the terminal transparent -- the one combination that
+-- looks worse than either alone.
+--
+-- passes counts more than size for smoothness: 3 passes at size 6 is softer,
+-- and cheaper, than 1 pass at the 8 Omarchy ships. ignore_opacity is already
+-- true by default, which is what makes a window's own alpha blur rather than
+-- just fade.
+hl.config({
+  decoration = {
+    blur = {
+      enabled = true,
+      size = 6,
+      passes = 3,
+      popups = true,
+    },
+  },
+})
+
 -- Every X11 client draws at 1x, not Omarchy's 2x.
 --
 -- Omarchy's hypr/monitors.lua sets GDK_SCALE=2 (its omarchy_gdk_scale), which

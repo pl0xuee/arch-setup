@@ -246,6 +246,13 @@ OMARCHY_BACKGROUND=nebula.jpg
 # foot's font size, in points. Omarchy ships 9, which is small on a 3440x1440.
 FOOT_FONT_SIZE=11
 
+# foot's background transparency, 0.0 to 1.0. Only the background goes
+# translucent -- text and the 16-colour palette stay fully opaque, which is what
+# foot's alpha does and Hyprland window opacity does not. Empty leaves whatever
+# is in foot.ini alone. Blur, which keeps this readable over a busy wallpaper,
+# is set in omarchy/hypr/personal.lua.
+FOOT_ALPHA=0.85
+
 # Clock widget formats. Qt date-format strings, not strftime.
 OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"
 OMARCHY_CLOCK_FORMAT_VERTICAL=$'h\n—\nmm\nAP'
@@ -3395,6 +3402,7 @@ configure_omarchy() {
     omarchy_bar_layout
     omarchy_hypr
     omarchy_terminal_font
+    omarchy_terminal_alpha
     omarchy_default_agent
     omarchy_mise_quiet
     omarchy_restart_shell
@@ -3990,6 +3998,74 @@ omarchy_terminal_font() {
     ok "foot font ${FOOT_FONT_SIZE}pt (was ${current}pt)"
     report "Omarchy terminal" "foot font ${FOOT_FONT_SIZE}pt"
     have omarchy && run omarchy restart terminal >/dev/null 2>&1 || true
+}
+
+# Terminal background transparency.
+#
+# foot keeps alpha in [colors-dark] -- the same section the theme's generated
+# foot.ini fills with colours, and that file is included at the top of [main].
+# foot parses an include where it appears and lets later keys win, so this has
+# to be written after it. It goes in the user's own foot.ini rather than the
+# theme, because applying a theme regenerates the theme's copy and would take
+# the transparency with it on every switch.
+#
+# Upserted the way omarchy_shell_font upserts base-size: foot.ini is a file
+# worth hand-editing, so the section is edited in place rather than the file
+# rewritten. Blur, which is what keeps a transparent terminal readable over a
+# busy wallpaper, is set alongside this in omarchy/hypr/personal.lua.
+#
+# No restart: foot re-reads its config only for new windows -- SIGUSR1 switches
+# to the dark variant rather than reloading, and omarchy-restart-terminal
+# touches alacritty, kitty and ghostty but never foot.
+omarchy_terminal_alpha() {
+    local conf="$HOME/.config/foot/foot.ini"
+
+    [[ -f "$conf" ]] || { skip "no foot.ini — skipping the terminal alpha"; return 0; }
+    [[ -n "${FOOT_ALPHA:-}" ]] || { skip "no foot alpha pinned — left alone"; return 0; }
+
+    local current
+    current="$(awk '
+        /^[[:space:]]*\[/ { in_colors = ($0 ~ /^[[:space:]]*\[colors-dark\][[:space:]]*$/); next }
+        in_colors && /^[[:space:]]*alpha[[:space:]]*=/ {
+            v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*(#.*)?$/, "", v)
+            print v; exit
+        }' "$conf")"
+
+    if [[ "$current" == "$FOOT_ALPHA" ]]; then
+        skip "foot alpha already $FOOT_ALPHA"
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run "set [colors-dark] alpha=$FOOT_ALPHA in $conf"
+        report "Omarchy terminal" "would set foot alpha to $FOOT_ALPHA"
+        return 0
+    fi
+
+    local tmp; tmp="$(mktemp)"
+    awk -v val="$FOOT_ALPHA" '
+        function emit() { print "alpha=" val; done = 1 }
+        /^[[:space:]]*\[/ {
+            if (in_colors && !done) emit()
+            in_colors = ($0 ~ /^[[:space:]]*\[colors-dark\][[:space:]]*$/)
+            print; next
+        }
+        in_colors && /^[[:space:]]*alpha[[:space:]]*=/ { if (!done) emit(); next }
+        { print }
+        END {
+            if (in_colors && !done) emit()
+            else if (!done) {
+                print ""
+                print "# Background transparency, set by arch-setup. After the [main] include,"
+                print "# so it wins over the generated [colors-dark] the theme brings in."
+                print "[colors-dark]"
+                print "alpha=" val
+            }
+        }' "$conf" > "$tmp"
+    mv "$tmp" "$conf"
+
+    ok "foot background alpha $FOOT_ALPHA${current:+ (was $current)} — applies to new windows"
+    report "Omarchy terminal" "foot alpha $FOOT_ALPHA"
 }
 
 # Which AI agent Omarchy's menu and keybindings launch. Omarchy ships no
