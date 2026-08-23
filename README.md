@@ -96,7 +96,7 @@ by piece. What it sets:
 | **One bar, one monitor** | Stock Omarchy puts a bar on every screen — `Variants { model: Quickshell.screens }`, with no option to narrow it. The patched clone reads `bar.monitors` from shell.json, so the bar lands on the ultrawide alone. A name that matches nothing falls back to every screen, so a box with different displays gets a bar rather than none. |
 | **Island bar** | `omarchy.bar` cloned to `<user>.bar` and patched: the panel surface goes transparent and each of the three sections paints its own rounded slab, so the bar reads as three islands instead of one edge-to-edge strip. |
 | **Tray drawer** | `omarchy.tray` cloned to `<user>.tray` and patched so the collapsed drawer stops holding width open for its hidden icons — otherwise the right island always carries a blank tail. |
-| **Theme and wallpaper** | The `solitude` theme, plus the wallpapers in `omarchy/backgrounds/solitude/`, one of them selected. |
+| **Theme and wallpaper** | The `nebula` theme — vendored in `omarchy/themes/nebula/`, not one of Omarchy's — installed into `~/.config/omarchy/themes/` and then applied, with its wallpaper selected. Its palette is sampled off that wallpaper, and it carries its own `hyprland.lua`, so windows get 14px rounded corners and a cyan-to-coral gradient border. Any wallpapers in `omarchy/backgrounds/<theme>/` are installed alongside. |
 | **Hyprland** | Window rules (Steam tiles, StreamHub stays opaque), the session PATH fix that keeps `~/.local/bin` ahead of `/usr/bin`, flat mouse acceleration, and this machine's monitor layout. |
 | **X11 app scale** | `GDK_SCALE=1`, over the 2 Omarchy sets for the HiDPI laptop its default is written for. The variable reaches XWayland clients only — Wayland apps take their scale from the compositor — and at 2 every X11 client drew at twice the size it asked for, the Tauri AppImages above worst of all, since their packaging forces them onto X11. Exact on a monitor at scale 1 and 20% small on one at 1.25; GTK on X11 has no fractional step in between. Pushed into the running session as well as the config, so it applies without a re-login. |
 | **Terminal** | foot's font size. |
@@ -174,6 +174,7 @@ again, delete it.
 | `packages/brave-extensions.txt` | extensions to auto-install |
 | `omarchy/patches/` | diffs applied to the cloned Omarchy bar and tray plugins |
 | `omarchy/hypr/` | window rules, input and monitor layout, installed into `~/.config/hypr/` |
-| `omarchy/backgrounds/<theme>/` | wallpapers installed into that theme's user folder |
+| `omarchy/themes/<theme>/` | custom themes installed into `~/.config/omarchy/themes/`, applied by name |
+| `omarchy/backgrounds/<theme>/` | extra wallpapers installed into that theme's user folder |
 | `~/.config/arch-setup/smb.conf` | network share settings — **outside the repo**, written on first run |
 | `install.sh` | panel height, tray, homepage, power profile, every Omarchy setting — as variables at the top |

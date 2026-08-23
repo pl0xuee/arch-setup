@@ -1,0 +1,37 @@
+# Nebula — derived from the deep-space nebula wallpaper.
+# Cool navy void, cyan ionization glow, warm coral/amber dust.
+
+mode = "dark"
+
+accent = "#4fc3c7"
+selection = "#1b3d4d"
+muted = "#3c5866"
+
+background = "#0a1621"
+dark_background = "#07111a"
+darker_background = "#050c13"
+lighter_background = "#122433"
+
+foreground = "#cbd8da"
+dark_foreground = "#5a7480"
+light_foreground = "#e6d6c3"
+bright_foreground = "#eaf4f4"
+
+hyprland_active_border = "rgba(4fc3c7ee) rgba(9fd8c0ee) rgba(f0895aee)"
+hyprland_inactive_border = "rgb(14232f)"
+active_border_color = "#4fc3c7"
+active_tab_background = "#1b3d4d"
+
+red = "#c0563d"
+yellow = "#d3a061"
+green = "#7fb894"
+cyan = "#3f9ea6"
+blue = "#3d84a6"
+magenta = "#a97383"
+
+bright_red = "#f0895a"
+bright_yellow = "#f2c97e"
+bright_green = "#a6d6ad"
+bright_cyan = "#7fdcd8"
+bright_blue = "#5cb0d1"
+bright_magenta = "#d99a9c"

@@ -230,11 +230,18 @@ SMB_MOUNT_OPTS="uid=1000,gid=1000,file_mode=0664,dir_mode=0775,iocharset=utf8,mf
 # text-scaling-factor and every terminal's font size along with it.
 OMARCHY_SHELL_FONT_PX=16
 
-# Theme, and which of its backgrounds to select. The background is a filename
-# inside omarchy/backgrounds/<theme>/ in this repo — leave it empty to install
+# Theme, and which of its backgrounds to select.
+#
+# A theme is either one Omarchy ships (`omarchy theme list`) or one vendored in
+# omarchy/themes/<theme>/ here, which is installed into
+# ~/.config/omarchy/themes/ before it is applied. `nebula` is the vendored kind:
+# a palette sampled off the wallpaper below, with rounded window corners.
+#
+# The background is a filename, looked for first in omarchy/backgrounds/<theme>/
+# and then in the vendored theme's own backgrounds/ — leave it empty to install
 # the wallpapers without picking one.
-OMARCHY_THEME=solitude
-OMARCHY_BACKGROUND=1308922.jpg
+OMARCHY_THEME=nebula
+OMARCHY_BACKGROUND=nebula.jpg
 
 # foot's font size, in points. Omarchy ships 9, which is small on a 3440x1440.
 FOOT_FONT_SIZE=11
@@ -3381,6 +3388,7 @@ configure_omarchy() {
     OMARCHY_SHELL_DIRTY=0
 
     omarchy_shell_font
+    omarchy_theme_files
     omarchy_theme
     omarchy_background
     omarchy_plugins
@@ -3460,6 +3468,52 @@ omarchy_shell_font() {
     report "Omarchy shell" "text ${want}px"
 }
 
+# Custom themes vendored in this repo, installed before one of them is applied.
+#
+# ~/.config/omarchy/themes/<name>/ is the user's own theme folder, and
+# omarchy-theme-set copies the stock theme of the same name in first and lays
+# the user's files on top. So a name Omarchy already ships gets overlaid file by
+# file, and a name it doesn't ship — nebula — becomes a theme in its own right.
+# Either way this has to land before omarchy_theme runs, or `omarchy theme set`
+# has nothing to set.
+#
+# Files are compared before they're copied because applying the theme in the
+# next step is the expensive part, and there's no reason to make a re-run look
+# like something changed when nothing did. Nothing is deleted: a preview.png or
+# an extra wallpaper dropped in by hand is yours and stays.
+omarchy_theme_files() {
+    local src="$REPO_DIR/omarchy/themes"
+
+    if [[ ! -d "$src" ]]; then
+        skip "no themes vendored in this repo"
+        return 0
+    fi
+
+    local copied=0 theme name dest f rel
+    for theme in "$src"/*/; do
+        [[ -d "$theme" ]] || continue
+        name="$(basename "$theme")"
+        dest="$HOME/.config/omarchy/themes/$name"
+
+        while IFS= read -r -d '' f; do
+            rel="${f#"$theme"}"
+            [[ -f "$dest/$rel" ]] && cmp -s "$f" "$dest/$rel" && continue
+            [[ $DRY_RUN -eq 1 ]] || mkdir -p "$(dirname "$dest/$rel")"
+            run cp "$f" "$dest/$rel"
+            copied=$((copied + 1))
+        done < <(find "$theme" -type f -print0)
+    done
+
+    if [[ $copied -gt 0 ]]; then
+        ok "$copied theme file(s) installed"
+        report "Omarchy themes" "$copied file(s) installed"
+    else
+        skip "vendored themes already installed"
+    fi
+
+    return 0
+}
+
 # Theme. `omarchy theme set` regenerates every themed config and restarts what
 # needs restarting, so it is not a cheap no-op — check the current theme first.
 omarchy_theme() {
@@ -3490,41 +3544,59 @@ omarchy_background() {
     local src="$REPO_DIR/omarchy/backgrounds/$OMARCHY_THEME"
     local dest="$HOME/.config/omarchy/backgrounds/$OMARCHY_THEME"
 
+    # No wallpapers vendored under this name is not the end of the step: a
+    # vendored theme keeps its own, and one still has to be selected below.
     if [[ ! -d "$src" ]]; then
-        skip "no wallpapers vendored for $OMARCHY_THEME"
-        return 0
-    fi
-
-    local copied=0 f
-    for f in "$src"/*; do
-        [[ -f "$f" ]] || continue
-        if [[ -f "$dest/$(basename "$f")" ]] && cmp -s "$f" "$dest/$(basename "$f")"; then
-            continue
-        fi
-        [[ $DRY_RUN -eq 1 ]] || mkdir -p "$dest"
-        run cp "$f" "$dest/"
-        copied=$((copied + 1))
-    done
-
-    if [[ $copied -gt 0 ]]; then
-        ok "$copied wallpaper(s) installed for $OMARCHY_THEME"
-        report "Omarchy wallpaper" "$copied installed"
+        skip "no loose wallpapers vendored for $OMARCHY_THEME"
     else
-        skip "wallpapers already installed"
+        local copied=0 f
+        for f in "$src"/*; do
+            [[ -f "$f" ]] || continue
+            if [[ -f "$dest/$(basename "$f")" ]] && cmp -s "$f" "$dest/$(basename "$f")"; then
+                continue
+            fi
+            [[ $DRY_RUN -eq 1 ]] || mkdir -p "$dest"
+            run cp "$f" "$dest/"
+            copied=$((copied + 1))
+        done
+
+        if [[ $copied -gt 0 ]]; then
+            ok "$copied wallpaper(s) installed for $OMARCHY_THEME"
+            report "Omarchy wallpaper" "$copied installed"
+        else
+            skip "wallpapers already installed"
+        fi
     fi
 
     # Selecting one is separate: the copy above is just files on disk, and the
     # current background is a symlink in ~/.local/state that the shell follows.
     [[ -n "$OMARCHY_BACKGROUND" ]] || return 0
     local want="$dest/$OMARCHY_BACKGROUND"
+
+    # A vendored theme carries its own backgrounds/, the way a theme cloned from
+    # a git repo does, and omarchy-theme-set reads both that folder and the user
+    # one above. Fall back to it rather than copying the file into the user
+    # folder as well: two copies under two names is two entries to cycle through
+    # with `omarchy theme bg next`, both of them the same picture.
+    [[ -f "$want" ]] \
+        || want="$HOME/.config/omarchy/themes/$OMARCHY_THEME/backgrounds/$OMARCHY_BACKGROUND"
+
     if [[ ! -f "$want" && $DRY_RUN -eq 0 ]]; then
-        warn "background $OMARCHY_BACKGROUND isn't in $dest — leaving the current one"
+        warn "background $OMARCHY_BACKGROUND is in neither $dest nor the $OMARCHY_THEME theme — leaving the current one"
         return 0
     fi
 
     local current=""
     current="$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null || true)"
-    if [[ "$current" == "$want" ]]; then
+
+    # Applying a theme copies the whole theme into
+    # ~/.local/state/omarchy/current/theme/, and a background the theme carries
+    # is then symlinked out of that copy rather than out of the folder it was
+    # installed to. The two paths never match even when the picture already on
+    # screen is the right one, so compare the files as well — otherwise every
+    # run re-sets the wallpaper and the shell fades it back in for nothing.
+    if [[ "$current" == "$want" ]] \
+        || { [[ -f "$current" && -f "$want" ]] && cmp -s "$current" "$want"; }; then
         skip "background already $OMARCHY_BACKGROUND"
         return 0
     fi
