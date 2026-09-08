@@ -1,0 +1,8 @@
+# Added only on native CachyOS installs (ID=cachyos in /etc/os-release).
+# Use the existing CachyOS repositories; never add these repositories to Omarchy.
+brave-origin-bin            # Brave Origin
+vesktop                     # Discord client
+protonup-qt                 # Manage Proton-GE / Wine-GE versions
+cachyos-gaming-meta         # CachyOS gaming dependencies and runners
+cachyos-gaming-applications # CachyOS gaming applications
+lib32-vulkan-radeon         # 32-bit AMD Vulkan driver, from enabled repos

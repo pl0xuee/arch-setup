@@ -479,6 +479,13 @@ omarchy_installed() {
         || have omarchy-version
 }
 
+# Package sources follow the installed distro, independently of the desktop.
+# Adding a CachyOS repository to Omarchy does not make it a CachyOS install.
+distro_id() (
+    . /etc/os-release
+    printf '%s' "${ID:-}"
+)
+
 detect_desktop() {
     if [[ -n "$DESKTOP_FORCED" ]]; then
         DESKTOP="$DESKTOP_FORCED"
@@ -639,9 +646,10 @@ Desktops:
   gated on it. On KDE Plasma the Plasma panel and powerdevil steps run and the
   omarchy step is skipped. On Omarchy (Arch + Hyprland) it is the other way
   round — there is no Plasma panel to pin to, and powerdevil is not what
-  handles idle there. Brave Origin and Vesktop install from the AUR using
-  yay or paru. No repositories or gaming packages are added; the distro
-  supplies its own gaming defaults.
+  handles idle there. Package sources follow /etc/os-release, not the desktop:
+  CachyOS uses its existing repositories and gaming package list. Omarchy and
+  plain Arch use yay or paru for Brave Origin and Vesktop and keep their gaming
+  defaults. No repositories are added on either path.
 
 Notes:
   A full system upgrade runs first by default. On Arch-based systems that
@@ -772,9 +780,18 @@ cleanup() {
 install_packages() {
     step "Repo and AUR packages"
 
-    [[ -f "$PKG_DIR/aur.txt" ]] || die "missing package list: $PKG_DIR/aur.txt"
-    local aur_pkgs=() aur_helper=""
-    mapfile -t aur_pkgs < <(read_list "$PKG_DIR/aur.txt")
+    local aur_pkgs=() cachyos_pkgs=() aur_helper=""
+    if [[ "$(distro_id)" == cachyos ]]; then
+        [[ -f "$PKG_DIR/pacman-cachyos.txt" ]] || die "missing package list: $PKG_DIR/pacman-cachyos.txt"
+        pacman-conf --repo-list | grep -q '^cachyos' \
+            || die "this CachyOS install has no CachyOS repositories configured; restore its repository configuration first."
+        mapfile -t cachyos_pkgs < <(read_list "$PKG_DIR/pacman-cachyos.txt")
+        info "CachyOS install — using its repositories and gaming packages."
+    else
+        [[ -f "$PKG_DIR/aur.txt" ]] || die "missing package list: $PKG_DIR/aur.txt"
+        mapfile -t aur_pkgs < <(read_list "$PKG_DIR/aur.txt")
+        info "Arch/Omarchy install — Brave Origin and Vesktop from AUR; gaming defaults left to the distro."
+    fi
     if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
         if have yay; then
             aur_helper=yay
@@ -797,6 +814,7 @@ install_packages() {
 
     local pkgs=() extra=()
     mapfile -t pkgs < <(read_list "$PKG_DIR/pacman.txt")
+    pkgs+=("${cachyos_pkgs[@]}")
 
     # Plasma-only packages are additive; the shared list works on either desktop.
     if [[ ! -f "$PKG_DIR/pacman-kde.txt" ]]; then

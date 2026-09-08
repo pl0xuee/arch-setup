@@ -249,7 +249,7 @@ fi
 # ("this name is NOT in that list"), which an empty array satisfies — so without
 # this, a list file that was never committed makes the suite go green for
 # precisely the deployment it would break.
-for f in aur pacman-kde; do
+for f in aur pacman-kde pacman-cachyos; do
     if [[ -f "$REPO_ROOT/packages/$f.txt" ]]; then
         pass "packages/$f.txt exists"
     else
@@ -359,7 +359,7 @@ group "AUR package installation"
 
 conf_before="$(sha256sum /etc/pacman.conf)"
 for helper in yay paru; do
-    out="$( have() { [[ "$1" == "$helper" ]]; }
+    out="$( distro_id() { printf omarchy; }; have() { [[ "$1" == "$helper" ]]; }
             DRY_RUN=1 SKIP_UPGRADE=1 DESKTOP=omarchy
             install_packages 2>&1 )"
     check_contains "$helper explicitly installs both apps from the AUR" \
@@ -373,7 +373,7 @@ done
 check_eq "a package dry run leaves pacman.conf untouched" "$conf_before" "$(sha256sum /etc/pacman.conf)"
 
 # A real invocation must fail before running sudo if an AUR helper is absent.
-out="$( have() { return 1; }
+out="$( distro_id() { printf omarchy; }; have() { return 1; }
         sudo() { echo UNEXPECTED_SUDO; return 1; }
         DRY_RUN=0 SKIP_UPGRADE=0 DESKTOP=omarchy
         install_packages 2>&1 )"; rc=$?
@@ -389,7 +389,7 @@ fi
 # Exercise the real transaction path with commands stubbed: AUR must still run
 # when all repo packages are already present, and its failures must propagate.
 for aur_status in 0 1; do
-    out="$( have() { [[ "$1" == yay ]]; }
+    out="$( distro_id() { printf omarchy; }; have() { [[ "$1" == yay ]]; }
             sudo() { echo "MOCK_SUDO $*"; }
             pacman() { [[ "$1" == -Qq ]] && printf 'existing-package\n'; }
             yay() { echo "MOCK_YAY $*"; return "$aur_status"; }
@@ -403,11 +403,67 @@ done
 for p in cachyos-gaming-meta cachyos-gaming-applications protonup-qt \
          proton-cachyos-slr wine-cachyos-opt lib32-vulkan-radeon; do
     if printf '%s\n' "${real[@]}" "${aur_pkgs[@]}" | grep -qx "$p"; then
-        fail "$p is left out of the setup package lists"
+        fail "$p is left out of the Omarchy package lists"
     else
-        pass "$p is left out of the setup package lists"
+        pass "$p is left out of the Omarchy package lists"
     fi
 done
+
+# Package selection must follow the distro, even when another desktop is used.
+group "Distro-specific packages"
+mapfile -t native_pkgs < <(read_list "$REPO_ROOT/packages/pacman-cachyos.txt")
+check_eq "native CachyOS retains its apps and gaming packages" \
+    "brave-origin-bin vesktop protonup-qt cachyos-gaming-meta cachyos-gaming-applications lib32-vulkan-radeon" \
+    "${native_pkgs[*]}"
+for distro in omarchy arch cachyos; do
+    for desktop in omarchy kde other; do
+        out="$( distro_id() { printf '%s' "$distro"; }
+                pacman-conf() { printf 'core\nextra\nmultilib\ncachyos\n'; }
+                have() { [[ "$1" == yay ]]; }
+                DRY_RUN=1 SKIP_UPGRADE=1 DESKTOP="$desktop"
+                install_packages 2>&1 )"; rc=$?
+        check_eq "$distro with $desktop desktop has a valid package plan" 0 "$rc"
+        if [[ "$distro" == cachyos ]]; then
+            check_contains "$distro/$desktop uses the CachyOS package list" \
+                "${native_pkgs[*]}" "$out"
+            if [[ "$out" == *'--aur'* ]]; then
+                fail "$distro/$desktop does not use AUR" "$out"
+            else
+                pass "$distro/$desktop does not use AUR"
+            fi
+        else
+            check_contains "$distro/$desktop uses AUR despite an enabled CachyOS repo" \
+                'yay -S --aur --needed --noconfirm brave-origin-bin vesktop-bin' "$out"
+            if [[ "$out" == *cachyos-gaming* || "$out" == *protonup-qt* || "$out" == *lib32-vulkan-radeon* ]]; then
+                fail "$distro/$desktop keeps its gaming defaults" "$out"
+            else
+                pass "$distro/$desktop keeps its gaming defaults"
+            fi
+        fi
+    done
+done
+out="$( distro_id() { printf cachyos; }
+        pacman-conf() { printf 'core\nextra\ncachyos\n'; }
+        have() { return 1; }
+        sudo() { printf 'MOCK_PACMAN %s\n' "$*"; }
+        pacman() { [[ "$1" == -Qq ]] && printf 'existing-package\n'; }
+        DRY_RUN=0 SKIP_UPGRADE=1 DESKTOP=kde
+        install_packages 2>&1 )"; rc=$?
+check_eq "native CachyOS installs without an AUR helper" 0 "$rc"
+check_contains "native CachyOS passes its apps to pacman" "${native_pkgs[*]}" "$out"
+out="$( distro_id() { printf cachyos; }
+        pacman-conf() { printf 'core\nextra\n'; }
+        sudo() { echo UNEXPECTED_SUDO; }
+        DRY_RUN=0 SKIP_UPGRADE=0 DESKTOP=kde
+        install_packages 2>&1 )"; rc=$?
+[[ $rc -ne 0 ]] && pass "missing native CachyOS repos stop the package step" \
+                 || fail "missing native CachyOS repos stop the package step"
+check_contains "missing native repositories explain the fix" 'restore its repository configuration' "$out"
+if [[ "$out" == *UNEXPECTED_SUDO* ]]; then
+    fail "missing native repositories are detected before changes" "$out"
+else
+    pass "missing native repositories are detected before changes"
+fi
 
 # ── desktop detection ─────────────────────────────────────────────────────────
 group "Desktop detection"

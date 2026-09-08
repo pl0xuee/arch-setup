@@ -52,27 +52,34 @@ What that changes:
 | Powerdevil idle settings | ✅ | skipped — Omarchy idles through its own shell |
 | `kscreen`, `qt6-imageformats` | ✅ | skipped — Plasma-only |
 | Bar, theme, wallpaper, Hyprland rules, monitors | skipped — no omarchy-shell | ✅ — see [The Omarchy desktop](#the-omarchy-desktop) |
-| Brave Origin and Vesktop from `packages/aur.txt` | ✅ — yay or paru | ✅ — yay or paru |
+| Brave Origin and Vesktop | ✅ — native CachyOS repos | ✅ — yay or paru |
+| CachyOS gaming packages | ✅ — on native CachyOS | skipped — Omarchy defaults |
 
 Nothing here fails the run. A skipped step says why, and the summary at the end
 lists what was left out.
 
 ### Package sources
 
-The script uses the existing pacman repositories for `packages/pacman.txt` and
-an installed **yay or paru** for `packages/aur.txt`. The AUR lookup is explicit
-(`--aur`), so Brave Origin and Vesktop are not selected from a binary repository.
-Brave Origin uses [Brave's AUR package](https://brave.com/origin/linux/), and
-Vesktop uses the [upstream-recommended `vesktop-bin`](https://vesktop.dev/install/linux/).
-If neither helper is installed, the packages step stops before changing anything
-and explains what is missing. Both apps remain part of `--only packages`.
+Package selection follows **`ID` in `/etc/os-release`**, independently of the
+current desktop or `--desktop` override:
 
-No CachyOS repository, signing key, mirrorlist, gaming bundles, Proton/Wine
-runners, ProtonUp-Qt, or extra gaming drivers are added. Gaming packages are
-left to the distro defaults, including Omarchy's defaults on Omarchy.
-Existing repositories and installed packages are not removed or migrated by
-this script. A machine configured by an older version keeps that configuration
-until it is changed separately.
+- **Native CachyOS (`ID=cachyos`)** uses its existing repositories for
+  `packages/pacman-cachyos.txt`: Brave Origin, Vesktop, ProtonUp-Qt, both CachyOS
+  gaming bundles, and the 32-bit AMD Vulkan driver. No AUR helper is needed.
+- **Omarchy and plain Arch** use an installed **yay or paru** for the two entries
+  in `packages/aur.txt`: [Brave Origin](https://brave.com/origin/linux/) and
+  [Vesktop's recommended binary package](https://vesktop.dev/install/linux/).
+  Explicit `--aur` lookup avoids selecting these apps from any added binary
+  repository. No gaming packages or drivers are added; Omarchy keeps its defaults.
+
+The shared `packages/pacman.txt` and desktop-specific `packages/pacman-kde.txt`
+continue to use the existing pacman repositories. Both paths remain part of
+`--only packages`. Missing AUR helpers on Arch/Omarchy, or missing CachyOS repos
+on a native CachyOS install, stop the package step before it changes anything.
+
+The installer adds no repositories, signing keys or mirrorlists. Existing
+repositories and installed packages are not removed or migrated. An Omarchy
+machine with CachyOS repositories added is still treated as Omarchy.
 
 ## The Omarchy desktop
 
@@ -172,7 +179,8 @@ does not remove unrelated entries. Delete `smb.conf` to be asked again.
 | File | |
 |---|---|
 | `packages/pacman.txt` | repo packages that exist on CachyOS *and* Arch |
-| `packages/aur.txt` | Brave Origin and Vesktop, installed explicitly from the AUR |
+| `packages/aur.txt` | Brave Origin and Vesktop from AUR on Omarchy/plain Arch |
+| `packages/pacman-cachyos.txt` | native CachyOS apps and gaming additions |
 | `packages/pacman-kde.txt` | packages only worth having on Plasma |
 | `packages/flatpak.txt` | Dropbox |
 | `packages/taskbar.txt` | pinned launchers, in order (KDE only) |

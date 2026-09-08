@@ -4,7 +4,8 @@
 # already installed.
 #
 # Anything that ISN'T available everywhere lives in a sibling list instead:
-#   aur.txt             Brave Origin and Vesktop, installed with yay or paru
+#   aur.txt             Brave Origin and Vesktop on Omarchy/plain Arch
+#   pacman-cachyos.txt   apps and gaming packages on native CachyOS only
 #   pacman-kde.txt       only worth installing on KDE Plasma
 
 # ── Apps ──────────────────────────────────────────────────────────────

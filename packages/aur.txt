@@ -1,4 +1,4 @@
-# Installed from the AUR with yay or paru, without adding a binary repository.
-# Gaming packages are left to the distro defaults.
+# Omarchy and plain Arch only: install with yay or paru, adding no repository.
+# Native CachyOS uses pacman-cachyos.txt instead.
 brave-origin-bin            # Brave Origin, maintained by Brave
 vesktop-bin                 # Vesktop upstream binary release
