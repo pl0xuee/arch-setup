@@ -210,13 +210,11 @@ TRAY_HIDDEN=(
 SMB_CONFIG="${SMB_CONFIG:-$HOME/.config/arch-setup/smb.conf}"
 SMB_CREDS="${SMB_CREDS:-/etc/samba/creds-nas}"
 
-# nofail so a server that is off, or a laptop away from home, cannot fail the
-# boot; _netdev so the mount is not attempted before the network is up; and
-# device-timeout so an unreachable host costs ten seconds rather than systemd's
-# ninety-second default. uid/gid hand the files to the human who logs in —
-# without them a CIFS mount with no unix extensions lands as root and is
-# read-only to everyone else.
-SMB_MOUNT_OPTS="uid=1000,gid=1000,file_mode=0664,dir_mode=0775,iocharset=utf8,mfsymlinks,noatime,_netdev,nofail,x-systemd.device-timeout=10,x-gvfs-show"
+# Systemd mounts as root when a bookmark accesses the folder. Hide the device
+# entry so the file manager cannot race it with an unprivileged mount attempt.
+# New mounts expire after 60 idle seconds; existing idle and permission options
+# survive migration. No device timeout: CIFS sources are not device units.
+SMB_MOUNT_OPTS="uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,iocharset=utf8,mfsymlinks,noatime,_netdev,nofail,x-systemd.automount,x-systemd.idle-timeout=60,x-gvfs-hide"
 
 # ── Omarchy desktop ───────────────────────────────────────────────────────────
 #
@@ -295,7 +293,7 @@ ONLY=""
 #
 #   kde      Plasma — CachyOS's default, and what this script was written for
 #   omarchy  Omarchy (Arch + Hyprland). No Plasma panel, no powerdevil, and the
-#            CachyOS repos aren't there either
+#            gaming stack is supplied by Omarchy
 #   other    anything else — the desktop-specific steps skip, the rest runs
 #
 # DESKTOP_FORCED is --desktop, for when the guess is wrong (or to test the other
@@ -461,17 +459,6 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # ── what are we running on ────────────────────────────────────────────────────
 #
-# Two questions, and they are NOT the same question:
-#
-#   detect_desktop()    which desktop is on screen — decides whether the Plasma
-#                       panel and powerdevil steps have anything to configure
-#   has_cachyos_repos() whether the CachyOS repos are enabled — decides which
-#                       packages can be installed at all
-#
-# Omarchy answers "hyprland" and "no" to those; CachyOS answers "kde" and "yes".
-# They are still asked separately, because CachyOS-with-something-else and
-# Arch-with-the-CachyOS-repos-added are both real machines, and a single
-# "is this CachyOS?" flag would get one of them wrong.
 # Whether Omarchy is on this box at all — which is a different question from
 # whether it is what the user is looking at.
 #
@@ -566,28 +553,6 @@ desktop_label() {
     esac
 }
 
-# Whether the CachyOS repos are enabled. That — not the distro's name — is what
-# decides package availability, and it is worth being exact about: pacman fails
-# the WHOLE transaction on one unknown package, so a single cachyos-only name in
-# the list is the difference between "everything installed" and "nothing did,
-# and set -e killed the run before any of the other steps".
-CACHYOS_REPOS=""
-has_cachyos_repos() {
-    if [[ -z "$CACHYOS_REPOS" ]]; then
-        local repos=""
-        # pacman-conf resolves Includes and honours commented-out sections, so
-        # it is the right answer; the grep is only there for a pacman old enough
-        # not to ship it, where a section header in the file is the best we have.
-        if have pacman-conf; then
-            repos="$(pacman-conf --repo-list 2>/dev/null || true)"
-        else
-            repos="$(sed -n 's/^\[\([^]]*\)\].*/\1/p' /etc/pacman.conf 2>/dev/null || true)"
-        fi
-        if grep -q '^cachyos' <<<"$repos"; then CACHYOS_REPOS=1; else CACHYOS_REPOS=0; fi
-    fi
-    [[ "$CACHYOS_REPOS" == 1 ]]
-}
-
 # Set one key in one group of a Qt/KDE-style INI file, creating the file and the
 # group if they aren't there.
 #
@@ -674,10 +639,9 @@ Desktops:
   gated on it. On KDE Plasma the Plasma panel and powerdevil steps run and the
   omarchy step is skipped. On Omarchy (Arch + Hyprland) it is the other way
   round — there is no Plasma panel to pin to, and powerdevil is not what
-  handles idle there. Everything else is common to both: the signed [cachyos]
-  repo is added on either (below Arch's, so Arch still wins every name
-  collision) and the CachyOS-only packages install as they do anywhere. No AUR
-  helper is used, or needed.
+  handles idle there. Brave Origin and Vesktop install from the AUR using
+  yay or paru. No repositories or gaming packages are added; the distro
+  supplies its own gaming defaults.
 
 Notes:
   A full system upgrade runs first by default. On Arch-based systems that
@@ -745,7 +709,7 @@ preflight() {
     # missing python would otherwise surface as a confusing checksum failure.
     have python || die "python is not installed (needed for checksum + JSON handling)."
 
-    for f in "$PKG_DIR/pacman.txt" "$PKG_DIR/flatpak.txt"; do
+    for f in "$PKG_DIR/pacman.txt" "$PKG_DIR/aur.txt" "$PKG_DIR/flatpak.txt"; do
         [[ -f "$f" ]] || die "missing package list: $f"
     done
 
@@ -753,19 +717,14 @@ preflight() {
         || die "no network (couldn't reach archlinux.org)."
     ok "root check, pacman, curl, sudo, package lists, network"
 
-    # Everything after this point asks "which desktop?" and "which repos?", so
-    # settle both here — once, out loud, before the first thing is installed.
-    # A run that quietly skipped the panel step because it guessed Omarchy on a
-    # Plasma box would be a mystery; this line is what makes it not one.
+    # Report the desktop before applying any desktop-specific settings.
     detect_desktop
-    local repos
-    if has_cachyos_repos; then repos="CachyOS repos"; else repos="Arch repos only"; fi
     if [[ -n "$DESKTOP_FORCED" ]]; then
-        ok "desktop: $(desktop_label) (forced with --desktop) · $repos"
+        ok "desktop: $(desktop_label) (forced with --desktop)"
     else
-        ok "desktop: $(desktop_label) · $repos"
+        ok "desktop: $(desktop_label)"
     fi
-    report "Detected" "$(desktop_label), $repos"
+    report "Detected" "$(desktop_label)"
     if [[ "$DESKTOP" != kde ]]; then
         info "The Plasma panel and powerdevil steps will be skipped — nothing here to configure."
     fi
@@ -811,7 +770,23 @@ cleanup() {
 
 # ── 1. pacman packages ────────────────────────────────────────────────────────
 install_packages() {
-    step "Repo packages"
+    step "Repo and AUR packages"
+
+    [[ -f "$PKG_DIR/aur.txt" ]] || die "missing package list: $PKG_DIR/aur.txt"
+    local aur_pkgs=() aur_helper=""
+    mapfile -t aur_pkgs < <(read_list "$PKG_DIR/aur.txt")
+    if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
+        if have yay; then
+            aur_helper=yay
+        elif have paru; then
+            aur_helper=paru
+        elif [[ $DRY_RUN -eq 1 ]]; then
+            info "An AUR helper (yay or paru) is required for a real run."
+            aur_helper=yay
+        else
+            die "install yay or paru before running the packages step (needed for Brave Origin and Vesktop)."
+        fi
+    fi
 
     if [[ $SKIP_UPGRADE -eq 1 ]]; then
         skip "system upgrade skipped (--skip-upgrade)"
@@ -820,31 +795,10 @@ install_packages() {
         run sudo pacman -Syu --noconfirm
     fi
 
-    ensure_cachyos_repo
-
     local pkgs=() extra=()
     mapfile -t pkgs < <(read_list "$PKG_DIR/pacman.txt")
 
-    # The conditional lists. Both are additive: everything in pacman.txt goes on
-    # every machine, and these only widen it. Skipping is a normal outcome and
-    # is said out loud, because "Steam never got installed" is otherwise a very
-    # quiet failure to notice three weeks later.
-    if [[ ! -f "$PKG_DIR/pacman-cachyos.txt" ]]; then
-        warn "missing $PKG_DIR/pacman-cachyos.txt — Brave, Vesktop and the gaming packages will NOT be installed"
-    else
-        mapfile -t extra < <(read_list "$PKG_DIR/pacman-cachyos.txt")
-        if [[ ${#extra[@]} -gt 0 ]]; then
-            if has_cachyos_repos; then
-                pkgs+=("${extra[@]}")
-            else
-                # Only reachable when ensure_cachyos_repo could not add the repo
-                # — it already said why, so this just records the consequence.
-                skip "no CachyOS repos — skipping ${#extra[@]} CachyOS-only packages"
-                report "Packages" "skipped (CachyOS repo unavailable): ${extra[*]}"
-            fi
-        fi
-    fi
-
+    # Plasma-only packages are additive; the shared list works on either desktop.
     if [[ ! -f "$PKG_DIR/pacman-kde.txt" ]]; then
         warn "missing $PKG_DIR/pacman-kde.txt — the Plasma-only packages will NOT be installed"
     else
@@ -859,7 +813,7 @@ install_packages() {
         fi
     fi
 
-    [[ ${#pkgs[@]} -gt 0 ]] || { skip "no packages listed"; return; }
+    [[ ${#pkgs[@]} -gt 0 ]] || die "no repo packages listed in $PKG_DIR/pacman.txt"
 
     # --needed makes this a no-op for anything already present, so most of
     # these get skipped on a CachyOS box that already ships them.
@@ -867,6 +821,9 @@ install_packages() {
 
     if [[ $DRY_RUN -eq 1 ]]; then
         run sudo pacman -S --needed --noconfirm "${pkgs[@]}"
+        if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
+            run "$aur_helper" -S --aur --needed --noconfirm "${aur_pkgs[@]}"
+        fi
         return 0
     fi
 
@@ -902,118 +859,14 @@ install_packages() {
         fi
     fi
 
-    return 0
-}
-
-# CachyOS's signing key and repo, for boxes that don't have them — Omarchy is
-# plain Arch, so `pacman -S cachyos-gaming-meta` there has nothing to install
-# from. Adding the repo is what makes the CachyOS-only list work everywhere,
-# and it is the whole reason there is no AUR list here: everything those five
-# packages need is in a signed binary repo, which beats building from unreviewed
-# PKGBUILDs.
-#
-# The key detail is WHERE the repo goes, and it is worth being emphatic about.
-#
-# CachyOS's own cachyos-repo.sh inserts [cachyos] ABOVE core/extra/multilib (and
-# switches Architecture to auto, pulling the v3/v4 repos as well). That is right
-# for CachyOS, where the optimised rebuilds are the entire point. It is very
-# wrong here: the cachyos repo shares 90 package names with Arch's, among them
-# pacman, mesa, linux-firmware, mkinitcpio, sddm, xz and zstd. Ordered first, the
-# next `pacman -Syu` — which omarchy-update runs on its own — starts replacing
-# Omarchy's base system with CachyOS builds. That is a conversion, not a package
-# source, and nobody asked for it.
-#
-# So the section is APPENDED, landing after every existing repo. Pacman resolves
-# a name from the first repo that has it, so Arch wins every one of those 90
-# collisions and the only things that come from here are the ones Arch does not
-# carry at all: the two gaming metapackages, brave-origin-bin, vesktop,
-# protonup-qt, and the proton/wine/heroic builds they depend on.
-CACHYOS_KEY="F3B607488DB35A47"
-CACHYOS_KEYSERVER="keyserver.ubuntu.com"
-CACHYOS_MIRROR='https://cdn77.cachyos.org/repo/$arch/$repo'
-ensure_cachyos_repo() {
-    has_cachyos_repos && { skip "CachyOS repos already configured"; return 0; }
-
-    local conf="/etc/pacman.conf"
-    local mirrorlist="/etc/pacman.d/cachyos-mirrorlist"
-
-    info "No CachyOS repos — adding them so the CachyOS-only packages can install..."
-
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run "sudo pacman-key --recv-keys $CACHYOS_KEY --keyserver $CACHYOS_KEYSERVER"
-        run "sudo pacman-key --lsign-key $CACHYOS_KEY"
-        run "sudo write $mirrorlist"
-        run "sudo append [cachyos] to $conf (AFTER core/extra/multilib, so Arch wins every name collision)"
-        run "sudo pacman -Sy"
-        report "CachyOS repo" "would add the signed [cachyos] repo, ordered below Arch's"
-        # A dry run has to predict the real run. Without this the CachyOS-only
-        # list is reported as skipped — true of the dry run, which changed
-        # nothing, but the opposite of what a real run does two lines later.
-        CACHYOS_REPOS=1
-        return 0
+    if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
+        info "Installing ${#aur_pkgs[@]} AUR packages with $aur_helper..."
+        # Force AUR lookup even if another enabled repo carries the same names.
+        # Run as the user: the helper elevates only the pacman transaction.
+        "$aur_helper" -S --aur --needed --noconfirm "${aur_pkgs[@]}" || return 1
+        report "AUR packages" "installed or already present: ${aur_pkgs[*]}"
     fi
 
-    # The key first. If this fails nothing has been touched yet, which is the
-    # point of doing it first: a pacman.conf naming a repo whose packages can't
-    # be verified makes every later pacman call fail, including the ones that
-    # would fix it.
-    if ! sudo pacman-key --recv-keys "$CACHYOS_KEY" --keyserver "$CACHYOS_KEYSERVER" >/dev/null 2>&1; then
-        warn "couldn't fetch CachyOS's signing key from $CACHYOS_KEYSERVER — leaving pacman.conf alone"
-        report "CachyOS repo" "FAILED (no signing key) — the CachyOS-only packages will be skipped"
-        return 0
-    fi
-    if ! sudo pacman-key --lsign-key "$CACHYOS_KEY" >/dev/null 2>&1; then
-        warn "couldn't locally sign CachyOS's key — leaving pacman.conf alone"
-        report "CachyOS repo" "FAILED (key not signed) — the CachyOS-only packages will be skipped"
-        return 0
-    fi
-
-    # One mirror, not the full generated list. This is a bootstrap: the real
-    # cachyos-mirrorlist package is installed from the repo below and overwrites
-    # this file with the maintained list.
-    printf '# Bootstrapped by arch-setup; replaced by the cachyos-mirrorlist package.\nServer = %s\n' \
-        "$CACHYOS_MIRROR" | sudo tee "$mirrorlist" >/dev/null
-
-    # Keeps the old name after the repo was renamed to arch-setup: machines
-    # provisioned before the rename already have this file, and the README's
-    # undo instructions point at it. A new name would just orphan both.
-    sudo cp -n "$conf" "$conf.before-cachyos-setup" 2>/dev/null || true
-
-    # multilib before cachyos, because cachyos-gaming-applications pulls steam
-    # and lib32-mangohud and pacman fails the whole transaction without them.
-    # Uncommented in place, so it keeps its position above the appended section.
-    if ! pacman-conf --repo-list 2>/dev/null | grep -qx multilib; then
-        info "Enabling the multilib repo (Steam and the lib32 packages live there)..."
-        sudo sed -i 's/^#\[multilib\]$/[multilib]/; /^\[multilib\]$/{n; s|^#Include = /etc/pacman.d/mirrorlist$|Include = /etc/pacman.d/mirrorlist|}' "$conf"
-        pacman-conf --repo-list 2>/dev/null | grep -qx multilib \
-            || warn "couldn't enable multilib — Steam and the lib32 packages will be skipped"
-    fi
-
-    printf '\n# Added by arch-setup. Deliberately LAST: pacman takes a package from the\n# first repo that has it, so every name Arch also carries still comes from Arch.\n[cachyos]\nInclude = %s\n' \
-        "$mirrorlist" | sudo tee -a "$conf" >/dev/null
-
-    if ! sudo pacman -Sy >/dev/null 2>&1; then
-        warn "pacman couldn't sync the new CachyOS repo — restoring $conf"
-        sudo cp "$conf.before-cachyos-setup" "$conf" 2>/dev/null || true
-        report "CachyOS repo" "FAILED (sync) — pacman.conf restored"
-        CACHYOS_REPOS=""
-        return 0
-    fi
-
-    # Hand the mirrorlist and keyring over to their real packages, so they are
-    # tracked and updated like anything else rather than frozen at whatever this
-    # script wrote today.
-    sudo pacman -S --needed --noconfirm cachyos-keyring cachyos-mirrorlist >/dev/null 2>&1 \
-        || warn "couldn't install cachyos-keyring/cachyos-mirrorlist — the repo works, but won't self-update"
-
-    CACHYOS_REPOS=""          # re-detect: has_cachyos_repos cached the old answer
-    if has_cachyos_repos; then
-        ok "CachyOS repo added, ordered below Arch's (Arch wins every name collision)"
-        report "CachyOS repo" "[cachyos] added below core/extra/multilib"
-    else
-        warn "added [cachyos] but pacman still doesn't list it — check $conf"
-        report "CachyOS repo" "added but not visible to pacman — check $conf"
-    fi
     return 0
 }
 
@@ -1024,7 +877,6 @@ install_flatpaks() {
     # flatpak is NOT on a stock CachyOS install, so pacman.txt installs it. If
     # it's missing here, the package step was skipped (--only flatpak) rather
     # than anything being broken.
-    have flatpak || die "flatpak is not installed — run the packages step first (it's in packages/pacman.txt)."
 
     local apps_dry=()
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -1040,6 +892,8 @@ install_flatpaks() {
         done
         return
     fi
+
+    have flatpak || die "flatpak is not installed — run the packages step first (it's in packages/pacman.txt)."
 
     # --system, not the default (which lists user AND system remotes). We install
     # system-wide, so a Flathub remote that exists only in the *user* scope — as
@@ -1325,13 +1179,7 @@ install_streamhub() {
         # matches, so every future run skips straight past this.
         if [[ ! -f "$APPS_DIR/com.streamhub.app.desktop" || ! -f "$STREAMHUB_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$STREAMHUB_DIR"
-            [[ -f "$STREAMHUB_DIR/icon.png" ]] || curl -fsSL -o "$STREAMHUB_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png" \
-                || warn "couldn't fetch the icon"
-            write_streamhub_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$STREAMHUB_DIR" "https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png" write_streamhub_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -1441,6 +1289,22 @@ StartupWMClass=StreamHub
 EOF
 }
 
+# Repair an installed app's launcher without bypassing --dry-run.
+repair_app_launcher() {
+    local app_dir="$1" icon_url="$2" writer="$3"
+    run mkdir -p "$APPS_DIR" "$app_dir"
+    if [[ ! -f "$app_dir/icon.png" ]]; then
+        run curl -fsSL -o "$app_dir/icon.png" "$icon_url" || warn "couldn't fetch the icon"
+    fi
+    run "$writer"
+    run refresh_desktop_db
+    if [[ $DRY_RUN -eq 1 ]]; then
+        info "Launcher would be recreated."
+    else
+        ok "launcher recreated"
+    fi
+}
+
 # KDE keeps its own application-menu index; without kbuildsycoca a new .desktop
 # file may not appear in the menu or KRunner until the next login.
 refresh_desktop_db() {
@@ -1526,13 +1390,7 @@ install_consolevault() {
         # otherwise skip this step forever, stranding a deleted .desktop/icon.
         if [[ ! -f "$APPS_DIR/com.consolevault.app.desktop" || ! -f "$CONSOLEVAULT_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$CONSOLEVAULT_DIR"
-            [[ -f "$CONSOLEVAULT_DIR/icon.png" ]] || curl -fsSL -o "$CONSOLEVAULT_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png" \
-                || warn "couldn't fetch the icon"
-            write_consolevault_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$CONSOLEVAULT_DIR" "https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png" write_consolevault_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -1670,13 +1528,7 @@ install_discripper() {
         # skip this step forever, stranding a deleted .desktop or icon.
         if [[ ! -f "$APPS_DIR/com.discripper.app.desktop" || ! -f "$DISCRIPPER_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$DISCRIPPER_DIR"
-            [[ -f "$DISCRIPPER_DIR/icon.png" ]] || curl -fsSL -o "$DISCRIPPER_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png" \
-                || warn "couldn't fetch the icon"
-            write_discripper_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$DISCRIPPER_DIR" "https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png" write_discripper_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -1831,13 +1683,7 @@ install_griddown() {
         if [[ ! -f "$APPS_DIR/com.griddown.app.desktop" || ! -f "$GRIDDOWN_DIR/icon.png" ]] \
             || ! grep -qx 'StartupWMClass=griddown' "$APPS_DIR/com.griddown.app.desktop"; then
             info "Launcher missing or out of date — recreating it..."
-            mkdir -p "$APPS_DIR" "$GRIDDOWN_DIR"
-            [[ -f "$GRIDDOWN_DIR/icon.png" ]] || curl -fsSL -o "$GRIDDOWN_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png" \
-                || warn "couldn't fetch the icon"
-            write_griddown_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$GRIDDOWN_DIR" "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png" write_griddown_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -1990,13 +1836,7 @@ for a in json.load(sys.stdin).get("assets", []):
         # skip this step forever, stranding a deleted .desktop or icon.
         if [[ ! -f "$APPS_DIR/com.stalkergamma.gui.desktop" || ! -f "$GAMMAGUI_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$GAMMAGUI_DIR"
-            [[ -f "$GAMMAGUI_DIR/icon.png" ]] || curl -fsSL -o "$GAMMAGUI_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png" \
-                || warn "couldn't fetch the icon"
-            write_gammagui_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$GAMMAGUI_DIR" "https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png" write_gammagui_desktop
         fi
 
         # Outside that branch on purpose: a stray launcher can sit beside a
@@ -2138,13 +1978,7 @@ for a in json.load(sys.stdin).get("assets", []):
         # skip this step forever, stranding a deleted .desktop or icon.
         if [[ ! -f "$APPS_DIR/com.lorerim.autoinstall.desktop" || ! -f "$LORERIM_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$LORERIM_DIR"
-            [[ -f "$LORERIM_DIR/icon.png" ]] || curl -fsSL -o "$LORERIM_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png" \
-                || warn "couldn't fetch the icon"
-            write_lorerim_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$LORERIM_DIR" "https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png" write_lorerim_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -2295,13 +2129,7 @@ for a in json.load(sys.stdin).get("assets", []):
         # skip this step forever, stranding a deleted .desktop or icon.
         if [[ ! -f "$APPS_DIR/com.wowwotlk.autoinstall.desktop" || ! -f "$WOTLK_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$WOTLK_DIR"
-            [[ -f "$WOTLK_DIR/icon.png" ]] || curl -fsSL -o "$WOTLK_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png" \
-                || warn "couldn't fetch the icon"
-            write_wotlk_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$WOTLK_DIR" "https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png" write_wotlk_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -2453,13 +2281,7 @@ install_musicai() {
         # skip this step forever, stranding a deleted .desktop or icon.
         if [[ ! -f "$APPS_DIR/music-ai-player.desktop" || ! -f "$MUSICAI_DIR/icon.png" ]]; then
             info "Launcher missing — recreating it..."
-            mkdir -p "$APPS_DIR" "$MUSICAI_DIR"
-            [[ -f "$MUSICAI_DIR/icon.png" ]] || curl -fsSL -o "$MUSICAI_DIR/icon.png" \
-                "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png" \
-                || warn "couldn't fetch the icon"
-            write_musicai_desktop
-            refresh_desktop_db
-            ok "launcher recreated"
+            repair_app_launcher "$MUSICAI_DIR" "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png" write_musicai_desktop
         fi
 
         # Outside the repair branch above on purpose: that only fires when ours
@@ -2581,6 +2403,11 @@ EOF
 # Asking is confined to the first run: after that ~/.config/arch-setup/smb.conf
 # answers every question, so a re-run is as silent as the rest of the script.
 smb_ask() {
+    have smbclient || {
+        warn "smbclient is not installed — run the packages step before setting up network shares"
+        report "Network shares" "SKIPPED (smbclient missing)"
+        return 1
+    }
     local host user pass reply line name
     local -a found=() chosen=()
 
@@ -2634,7 +2461,7 @@ smb_ask() {
     for name in "${found[@]}"; do
         printf '     %-24s -> /mnt/%s\n' "$name" "${name// /}"
     done
-    printf '\n   Mount these at boot? [Y/n] '
+    printf '\n   Automount these folders when opened? [Y/n] '
     read -r reply </dev/tty || return 1
     case "$reply" in
         [Nn]*) info "  left unmounted — edit $SMB_CONFIG and re-run to change this"; return 1 ;;
@@ -2648,7 +2475,7 @@ smb_ask() {
     {
         printf '# Written by arch-setup on first run. Machine-local: never commit this.\n'
         printf '# The password is not here — it is in %s, root-owned and 0600.\n' "$SMB_CREDS"
-        printf '# Drop a share by deleting its line, then re-run install.sh.\n\n'
+        printf '# Entries removed here must also be removed from fstab and bookmarks separately.\n\n'
         printf 'SMB_HOST=%q\n' "$host"
         printf 'SMB_USER=%q\n' "$user"
         printf 'SMB_SHARES=(\n'
@@ -2698,59 +2525,66 @@ configure_network_shares() {
         return 0
     fi
 
-    local entry share mp src backed_up=0 mounted=0
+    local helper="$REPO_DIR/lib/nas_mounts.py"
+    [[ -r "$helper" ]] || { warn "missing $helper — network shares skipped"; return 0; }
+    have systemd-escape || { warn "systemd-escape is missing — network shares skipped"; return 0; }
+
+    local entry share mp src unit ready=0
+    local -a configured=()
     for entry in "${SMB_SHARES[@]}"; do
         share="${entry%%:*}"
         mp="${entry#*:}"
-        # fstab splits fields on whitespace, so a space in a share name has to be
-        # \040 there. The mount point simply doesn't get one.
-        src="//$SMB_HOST/${share// /\\040}"
+        src="//$SMB_HOST/$share"
 
-        run sudo mkdir -p "$mp"
-
-        if grep -qE "[[:space:]]${mp}[[:space:]]" /etc/fstab 2>/dev/null; then
-            skip "$mp already in /etc/fstab"
-        else
-            if [[ $backed_up -eq 0 ]]; then
-                run sudo cp -a /etc/fstab "/etc/fstab.bak.$(date +%s)"
-                backed_up=1
-            fi
-            # credentials= rather than the password itself: /etc/fstab is
-            # world-readable and $SMB_CREDS is not.
-            if [[ $DRY_RUN -eq 1 ]]; then
-                printf '   %s[dry-run]%s append to /etc/fstab: %s %s cifs\n' \
-                    "$YELLOW" "$RESET" "$src" "$mp"
-            else
-                printf '%s\t%s\tcifs\tcredentials=%s,%s\t0 0\n' \
-                    "$src" "$mp" "$SMB_CREDS" "$SMB_MOUNT_OPTS" |
-                    sudo tee -a /etc/fstab >/dev/null
-            fi
-            ok "$mp added to /etc/fstab"
-        fi
-    done
-
-    run sudo systemctl daemon-reload
-
-    for entry in "${SMB_SHARES[@]}"; do
-        mp="${entry#*:}"
+        # Exact source, mount point and credentials matching protects unrelated
+        # entries. The helper backs up and atomically updates fstab only if needed.
         if [[ $DRY_RUN -eq 1 ]]; then
-            printf '   %s[dry-run]%s mount %s\n' "$YELLOW" "$RESET" "$mp"
+            if ! python "$helper" fstab /etc/fstab "$src" "$mp" "$SMB_CREDS" "$SMB_MOUNT_OPTS" --dry-run; then
+                warn "couldn't configure $mp — share skipped"
+                continue
+            fi
+        elif ! sudo python "$helper" fstab /etc/fstab "$src" "$mp" "$SMB_CREDS" "$SMB_MOUNT_OPTS"; then
+            warn "couldn't configure $mp — share skipped"
             continue
         fi
-        if mountpoint -q "$mp"; then
-            skip "$mp already mounted"
-            mounted=$((mounted + 1))
-        elif sudo mount "$mp" >/dev/null 2>&1; then
-            ok "mounted $mp"
-            mounted=$((mounted + 1))
+        run sudo mkdir -p "$mp"
+        configured+=("$entry")
+    done
+
+    [[ ${#configured[@]} -gt 0 ]] || return 0
+    if ! run sudo systemctl daemon-reload; then
+        warn "couldn't reload systemd — automount activation skipped"
+        return 0
+    fi
+
+    for entry in "${configured[@]}"; do
+        share="${entry%%:*}"
+        mp="${entry#*:}"
+        unit="$(systemd-escape --path --suffix=automount -- "$mp")" || {
+            warn "couldn't derive an automount unit for $mp"
+            continue
+        }
+        # Generated units start now and are pulled in at boot by fstab-generator.
+        # Do not mount, restart, or unmount an active share here.
+        if run sudo systemctl start "$unit"; then
+            ready=$((ready + 1))
         else
-            # nofail is in the options, so this costs nothing at boot — it just
-            # means the server isn't answering right now.
-            warn "couldn't mount $mp — server unreachable? (nofail, so boot is unaffected)"
+            warn "couldn't start $unit — existing mounts were left intact; check the unit before using its bookmark"
+        fi
+        if [[ $DRY_RUN -eq 1 ]]; then
+            python "$helper" bookmark "$HOME/.config/gtk-3.0/bookmarks" "$mp" "$share" --dry-run \
+                || warn "couldn't prepare the bookmark for $mp"
+        else
+            # Deliberately unprivileged: these are the desktop user's bookmarks.
+            python "$helper" bookmark "$HOME/.config/gtk-3.0/bookmarks" "$mp" "$share" \
+                || warn "couldn't add the bookmark for $mp"
         fi
     done
 
-    [[ $DRY_RUN -eq 1 ]] || report "Network shares" "$mounted of ${#SMB_SHARES[@]} mounted from //$SMB_HOST"
+    if [[ $DRY_RUN -eq 0 ]]; then
+        report "Network shares" "$ready of ${#configured[@]} automounts active; folder bookmarks configured"
+    fi
+    return 0
 }
 
 configure_system() {
@@ -2848,12 +2682,9 @@ EOF
 
 # Which Brave profile directory to write into.
 #
-# CachyOS's brave-origin-bin is a different BUILD from upstream Brave, and the
-# two keep separate profiles: ~/.config/BraveSoftware/Brave-Origin against
-# .../Brave-Browser. Off CachyOS there is no brave-origin at all — Omarchy gets
-# upstream brave-bin from the AUR — so hardcoding Brave-Origin there means the
-# filter lists and the KeePassXC manifest are written to a directory the running
-# browser never opens. No error, no effect.
+# Brave Origin and standard Brave use different profile directories:
+# .../BraveSoftware/Brave-Origin vs .../Brave-Browser. Follow an existing
+# installation so the filter lists and KeePassXC manifest reach its profile.
 #
 # The installed binary decides it, not whichever directory happens to exist: a
 # leftover profile from a browser that is no longer installed is not the answer.
@@ -2866,16 +2697,10 @@ brave_profile_dir() {
     # Not installed yet. In a full run it will be by the time this is called —
     # packages is step 1 and the config step is last — so this is really the
     # `--only config` path on a box with no Brave at all. Go with whichever
-    # profile is already on disk, then with whichever Brave this machine could
-    # even install: brave-origin-bin exists only in the CachyOS repos, so
-    # without them upstream Brave is the only possible answer.
+    # profile is already on disk, then default to the Origin build in aur.txt.
     if [[ -d "$base/Brave-Origin"  ]]; then printf '%s/Brave-Origin'  "$base"; return; fi
     if [[ -d "$base/Brave-Browser" ]]; then printf '%s/Brave-Browser' "$base"; return; fi
-    if has_cachyos_repos; then
-        printf '%s/Brave-Origin'  "$base"
-    else
-        printf '%s/Brave-Browser' "$base"
-    fi
+    printf '%s/Brave-Origin' "$base"
 }
 
 # Switch on Brave's optional ad-block filter lists.
@@ -3667,6 +3492,30 @@ omarchy_plugins() {
 # shell code on its own schedule, and a bar that looks stock is a far better
 # outcome than a run that dies — or, worse, a half-patched QML file that stops
 # the shell from starting at all.
+# Both vendored patches modify one QML file. Build the complete replacement
+# away from the live plugin, then publish it with a rename on the same filesystem.
+# A rejected hunk never reaches the live file, and .rej/.orig stay in staging.
+omarchy_apply_patch() {
+    local dir="$1" patch_file="$2" qml="$3" stage replacement="" status=1
+    stage="$(mktemp -d)" || return 1
+    if cp -p "$dir/$qml" "$stage/$qml" &&
+       patch -p1 --forward --batch -s -d "$stage" < "$patch_file" &&
+       replacement="$(mktemp "$dir/.$qml.XXXXXX")" &&
+       cp -p "$stage/$qml" "$replacement" &&
+       mv -f "$replacement" "$dir/$qml"; then
+        status=0
+    fi
+    [[ -z "$replacement" ]] || rm -f -- "$replacement"
+    rm -rf -- "$stage"
+    return "$status"
+}
+
+omarchy_patch_applied() {
+    local dir="$1" patch_file="$2"
+    [[ -d "$dir" && -r "$patch_file" ]] && have patch &&
+        patch -p1 -R --dry-run -f -s -d "$dir" < "$patch_file" >/dev/null 2>&1
+}
+
 omarchy_clone_and_patch() {
     local source_id="$1" patch_file="$2" upstream="$3" baseline_sha="$4" label="$5"
     local clone_id="${USER:-$(id -un)}.${source_id#omarchy.}"
@@ -3699,7 +3548,7 @@ omarchy_clone_and_patch() {
     # nothing, so it runs before the dry-run branch — a dry run that claims it
     # would patch an already-patched file is a dry run telling you the wrong
     # thing about the machine.
-    if [[ -d "$dir" ]] && patch -p1 -R --dry-run -f -s -d "$dir" < "$patch_file" >/dev/null 2>&1; then
+    if omarchy_patch_applied "$dir" "$patch_file"; then
         skip "$clone_id already carries the $label patch"
         report "Omarchy plugins" "$clone_id already patched ($label)"
         return 0
@@ -3722,16 +3571,13 @@ omarchy_clone_and_patch() {
         fi
     fi
 
-    if patch -p1 --forward -s -d "$dir" < "$patch_file" >/dev/null 2>&1; then
+    if omarchy_apply_patch "$dir" "$patch_file" "${upstream##*/}" >/dev/null 2>&1; then
         OMARCHY_SHELL_DIRTY=1
         ok "$clone_id patched ($label)"
         report "Omarchy plugins" "$clone_id patched ($label)"
     else
-        warn "the $label patch didn't apply to $clone_id — it's running Omarchy's stock code"
-        report "Omarchy plugins" "$label patch FAILED (stock $source_id in use)"
-        # Leave no half-applied file behind: .rej/.orig next to live QML would
-        # be loaded by the shell as if it were code.
-        find "$dir" -name '*.rej' -o -name '*.orig' -delete 2>/dev/null || true
+        warn "the $label patch didn't apply to $clone_id — existing files were preserved; the layout will use stock $source_id"
+        report "Omarchy plugins" "$label patch FAILED (clone not selected)"
     fi
 }
 
@@ -3766,16 +3612,19 @@ omarchy_bar_layout() {
         return 0
     fi
 
-    # Only claim the cloned bar/tray when the clone is actually there and
-    # patched — pointing shell.json at a plugin that doesn't exist is how you
-    # get no bar at all.
-    [[ -d "$HOME/.config/omarchy/plugins/$bar_id"  ]] || bar_id=""
-    [[ -d "$HOME/.config/omarchy/plugins/$tray_id" ]] || tray_id=""
+    # A clone command enables its result before we patch it. Validate the whole
+    # patch before keeping that selection, including on subsequent runs.
+    local bar_clone_id="$bar_id" tray_clone_id="$tray_id"
+    omarchy_patch_applied "$HOME/.config/omarchy/plugins/$bar_id" \
+        "$REPO_DIR/omarchy/patches/bar-islands.patch" || bar_id=""
+    omarchy_patch_applied "$HOME/.config/omarchy/plugins/$tray_id" \
+        "$REPO_DIR/omarchy/patches/tray-collapse.patch" || tray_id=""
 
     local before after
     before="$(cat "$conf")"
 
     BAR_ID="$bar_id" TRAY_ID="$tray_id" \
+    BAR_CLONE_ID="$bar_clone_id" TRAY_CLONE_ID="$tray_clone_id" \
     CLOCK_FORMAT="$OMARCHY_CLOCK_FORMAT" CLOCK_VERTICAL="$OMARCHY_CLOCK_FORMAT_VERTICAL" \
     EXTRA_RIGHT="$(IFS=,; printf '%s' "${OMARCHY_BAR_RIGHT_EXTRA[*]}")" \
     BAR_MONITORS="$(IFS=,; printf '%s' "${OMARCHY_BAR_MONITORS[*]}")" \
@@ -3793,17 +3642,19 @@ center = layout.setdefault("center", [])
 
 bar_id, tray_id = os.environ["BAR_ID"], os.environ["TRAY_ID"]
 
-# The bar plugin itself. Absent id means "use the built-in bar", which is what
-# the key looks like on a stock install, so only write it when we have a clone.
+# Fall back only from clones managed by this script; preserve other custom IDs.
 if bar_id:
     bar["id"] = bar_id
+elif bar.get("id") == os.environ["BAR_CLONE_ID"]:
+    bar.pop("id", None)
 
-# The tray widget is a layout entry like any other, so swapping it is a matter
-# of renaming the entry in place — which keeps its position in the section.
-if tray_id:
-    for entry in right:
-        if entry.get("id") in ("omarchy.tray", tray_id):
-            entry["id"] = tray_id
+# The user may have moved the tray to another section since installation.
+for section in layout.values():
+    if not isinstance(section, list):
+        continue
+    for entry in section:
+        if entry.get("id") in ("omarchy.tray", os.environ["TRAY_CLONE_ID"]):
+            entry["id"] = tray_id or "omarchy.tray"
 
 # Extra widgets go directly after the tray, matching the real bar. Anything the
 # user has since dragged elsewhere is left where they put it.

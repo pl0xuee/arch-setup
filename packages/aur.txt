@@ -1,0 +1,4 @@
+# Installed from the AUR with yay or paru, without adding a binary repository.
+# Gaming packages are left to the distro defaults.
+brave-origin-bin            # Brave Origin, maintained by Brave
+vesktop-bin                 # Vesktop upstream binary release

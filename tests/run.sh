@@ -249,7 +249,7 @@ fi
 # ("this name is NOT in that list"), which an empty array satisfies — so without
 # this, a list file that was never committed makes the suite go green for
 # precisely the deployment it would break.
-for f in pacman-cachyos pacman-kde; do
+for f in aur pacman-kde; do
     if [[ -f "$REPO_ROOT/packages/$f.txt" ]]; then
         pass "packages/$f.txt exists"
     else
@@ -271,20 +271,11 @@ for p in kscreen qt6-imageformats; do
     fi
 done
 
-# The whole point of the split: pacman.txt must be installable on plain Arch.
-# Anything cachyos-only left in it fails the ENTIRE pacman transaction there —
-# pacman is all-or-nothing on an unknown package name — and takes the run with
-# it under set -e, before a single other step has run.
-mapfile -t cachy_pkgs < <(read_list "$REPO_ROOT/packages/pacman-cachyos.txt")
+# The shared repo list must remain installable from Arch's own repositories.
+mapfile -t aur_pkgs < <(read_list "$REPO_ROOT/packages/aur.txt")
+check_eq "AUR list contains only Brave Origin and Vesktop" \
+    "brave-origin-bin vesktop-bin" "${aur_pkgs[*]}"
 
-# Checked against the plain-Arch repos directly, NOT against the names that
-# happen to be in pacman-cachyos.txt. The realistic way this regresses is a
-# CachyOS-only package added to pacman.txt and never added to the other list,
-# and a cross-list comparison cannot see that at all.
-#
-# core/extra/multilib are Arch's own repos, present under those names on CachyOS
-# too (its optimised rebuilds live in separate cachyos-* repos), so this is a
-# real answer to "would plain Arch find this?" from either kind of box.
 if arch_only="$(pacman -Sl core extra multilib 2>/dev/null | awk '{print $2}' | sort -u)" \
    && [[ -n "$arch_only" ]]; then
     unavailable=()
@@ -302,13 +293,13 @@ else
 fi
 
 leaked=()
-for p in "${cachy_pkgs[@]}"; do
+for p in "${aur_pkgs[@]}"; do
     printf '%s\n' "${real[@]}" | grep -qx "$p" && leaked+=("$p")
 done
 if [[ ${#leaked[@]} -eq 0 ]]; then
-    pass "no CachyOS-only package leaked into pacman.txt (${#cachy_pkgs[@]} checked)"
+    pass "no AUR package leaked into pacman.txt (${#aur_pkgs[@]} checked)"
 else
-    fail "no CachyOS-only package leaked into pacman.txt" \
+    fail "no AUR package leaked into pacman.txt" \
          "these would break the whole transaction on Arch: ${leaked[*]}"
 fi
 
@@ -363,107 +354,60 @@ else
     fail "all KDE-only packages resolve" "not found: ${missing[*]}"
 fi
 
-# The cachyos list can only be checked where the CachyOS repos are actually
-# enabled — on plain Arch every name in it is expected to be missing, which is
-# the entire reason the list exists.
-if has_cachyos_repos; then
-    missing=()
-    for p in "${cachy_pkgs[@]}"; do
-        pacman -Si "$p" >/dev/null 2>&1 || missing+=("$p")
-    done
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        pass "all ${#cachy_pkgs[@]} CachyOS-only packages found in the CachyOS repos"
-    else
-        fail "all CachyOS-only packages resolve" "not found: ${missing[*]}"
-    fi
+# ── AUR package installation, without repo or gaming changes ──────────────────
+group "AUR package installation"
 
-    # And the converse: a package that resolves WITHOUT the CachyOS repos does
-    # not belong in this list — it would be needlessly withheld from Arch.
-    strays=()
-    for p in "${cachy_pkgs[@]}"; do
-        repo="$(pacman -Si "$p" 2>/dev/null | awk -F': ' '/^Repository/{print $2; exit}')"
-        [[ "$repo" == cachyos* ]] || strays+=("$p (in $repo)")
-    done
-    if [[ ${#strays[@]} -eq 0 ]]; then
-        pass "every package in pacman-cachyos.txt really is CachyOS-only"
-    else
-        fail "every package in pacman-cachyos.txt really is CachyOS-only" \
-             "these come from a repo Arch has too: ${strays[*]}"
-    fi
-else
-    printf '  %s·%s no CachyOS repos here — skipping the CachyOS-only package check\n' "$DIM" "$RESET"
-fi
-
-# ── the CachyOS repo bootstrap ────────────────────────────────────────────────
-group "CachyOS repo bootstrap"
-
-# THE property that makes this safe. CachyOS's own cachyos-repo.sh inserts
-# [cachyos] above core/extra/multilib; the plain cachyos repo shares 90 package
-# names with Arch's, including pacman, mesa, linux-firmware, mkinitcpio, sddm,
-# xz and zstd. Ordered first, the next `pacman -Syu` — which omarchy-update runs
-# by itself — starts replacing Omarchy's base system with CachyOS builds.
-# Appending is what keeps Arch winning every one of those collisions, so a
-# refactor that "tidies" this into an insert has to fail loudly.
-fn="$(awk '/^ensure_cachyos_repo\(\)/,/^}/' "$SCRIPT")"
-if grep -q 'tee -a "\$conf"' <<<"$fn"; then
-    pass "the [cachyos] section is APPENDED, so it lands below Arch's repos"
-else
-    fail "the [cachyos] section is appended" \
-         "inserted above core/extra, CachyOS would replace pacman, mesa and linux-firmware"
-fi
-if grep -qE 'pacman-key --lsign-key' <<<"$fn"; then
-    pass "the signing key is locally signed before the repo is used"
-else
-    fail "the signing key is locally signed" "pacman refuses packages from an unsigned key"
-fi
-
-# The key must be imported BEFORE pacman.conf is touched. A pacman.conf naming a
-# repo whose packages can't be verified breaks every later pacman call —
-# including the ones that would undo it.
-if [[ "$(grep -n 'pacman-key --recv-keys' <<<"$fn" | head -1 | cut -d: -f1)" -lt \
-      "$(grep -n 'tee -a "\$conf"'          <<<"$fn" | head -1 | cut -d: -f1)" ]]; then
-    pass "the key is imported before pacman.conf is edited"
-else
-    fail "the key is imported before pacman.conf is edited" \
-         "a failed key import would leave a pacman.conf that breaks every later pacman call"
-fi
-
-# It must not touch a box that already has the repos — this is your machine.
-out="$( has_cachyos_repos() { return 0; }; DRY_RUN=1; ensure_cachyos_repo 2>&1 )"
-check_contains "it no-ops where the repos already exist" "already configured" "$out"
-if grep -q 'dry-run' <<<"$out"; then
-    fail "it no-ops where the repos already exist" "it still proposed changes"
-else
-    pass "it proposes no changes where the repos already exist"
-fi
-
-# ...and a dry run must not touch pacman.conf even where they don't.
 conf_before="$(sha256sum /etc/pacman.conf)"
-( has_cachyos_repos() { return 1; }; DRY_RUN=1; ensure_cachyos_repo ) >/dev/null 2>&1
-check_eq "a dry run leaves /etc/pacman.conf untouched" "$conf_before" "$(sha256sum /etc/pacman.conf)"
+for helper in yay paru; do
+    out="$( have() { [[ "$1" == "$helper" ]]; }
+            DRY_RUN=1 SKIP_UPGRADE=1 DESKTOP=omarchy
+            install_packages 2>&1 )"
+    check_contains "$helper explicitly installs both apps from the AUR" \
+        "$helper -S --aur --needed --noconfirm brave-origin-bin vesktop-bin" "$out"
+    if grep -qE 'cachyos|pacman-key|lib32-vulkan-radeon|protonup-qt|wine|gamescope|mangohud' <<<"$out"; then
+        fail "$helper dry run adds no CachyOS sources or gaming packages" "$out"
+    else
+        pass "$helper dry run adds no CachyOS sources or gaming packages"
+    fi
+done
+check_eq "a package dry run leaves pacman.conf untouched" "$conf_before" "$(sha256sum /etc/pacman.conf)"
 
-# A dry run must predict the real run. The repo is added before the lists are
-# consulted, so a dry run that reported the CachyOS-only packages as skipped
-# would be describing itself rather than the install it stands in for.
-out="$( has_cachyos_repos() { [[ "$CACHYOS_REPOS" == 1 ]]; }
-        DRY_RUN=1 SKIP_UPGRADE=1 DESKTOP=omarchy CACHYOS_REPOS=0
-        install_packages 2>&1 )"
-check_contains "a dry run without the repos still shows Brave installing" "brave-origin-bin" "$out"
-check_contains "...and the gaming metapackages"  "cachyos-gaming-meta" "$out"
-
-# The gaming metapackages need steam and lib32-mangohud, which are multilib.
-# pacman fails the whole transaction on an unsatisfiable dependency, so the
-# repo being present is not enough on its own.
-if grep -q 'multilib' <<<"$fn"; then
-    pass "multilib is enabled too (steam and the lib32 packages live there)"
+# A real invocation must fail before running sudo if an AUR helper is absent.
+out="$( have() { return 1; }
+        sudo() { echo UNEXPECTED_SUDO; return 1; }
+        DRY_RUN=0 SKIP_UPGRADE=0 DESKTOP=omarchy
+        install_packages 2>&1 )"; rc=$?
+[[ $rc -ne 0 ]] && pass "a missing AUR helper fails the packages step" \
+                 || fail "a missing AUR helper fails the packages step"
+check_contains "the missing-helper error explains the fix" "install yay or paru" "$out"
+if [[ "$out" == *UNEXPECTED_SUDO* ]]; then
+    fail "missing-helper detection happens before system changes" "$out"
 else
-    fail "multilib is enabled too" "cachyos-gaming-applications can't resolve steam without it"
+    pass "missing-helper detection happens before system changes"
 fi
 
-# The key fingerprint is the one thing here that must not be guessed: it is what
-# every package from this repo is verified against.
-check_contains "the pinned key is CachyOS's published one" "F3B607488DB35A47" \
-    "$(grep '^CACHYOS_KEY=' "$SCRIPT")"
+# Exercise the real transaction path with commands stubbed: AUR must still run
+# when all repo packages are already present, and its failures must propagate.
+for aur_status in 0 1; do
+    out="$( have() { [[ "$1" == yay ]]; }
+            sudo() { echo "MOCK_SUDO $*"; }
+            pacman() { [[ "$1" == -Qq ]] && printf 'existing-package\n'; }
+            yay() { echo "MOCK_YAY $*"; return "$aur_status"; }
+            DRY_RUN=0 SKIP_UPGRADE=1 DESKTOP=omarchy
+            install_packages 2>&1 )"; rc=$?
+    check_eq "AUR status $aur_status propagates from the packages step" "$aur_status" "$rc"
+    check_contains "AUR runs when repo packages are already installed (status $aur_status)" \
+        "MOCK_YAY -S --aur --needed --noconfirm brave-origin-bin vesktop-bin" "$out"
+done
+
+for p in cachyos-gaming-meta cachyos-gaming-applications protonup-qt \
+         proton-cachyos-slr wine-cachyos-opt lib32-vulkan-radeon; do
+    if printf '%s\n' "${real[@]}" "${aur_pkgs[@]}" | grep -qx "$p"; then
+        fail "$p is left out of the setup package lists"
+    else
+        pass "$p is left out of the setup package lists"
+    fi
+done
 
 # ── desktop detection ─────────────────────────────────────────────────────────
 group "Desktop detection"
@@ -602,11 +546,10 @@ done
 
 if ( set -e
      DESKTOP=omarchy DRY_RUN=1 SKIP_UPGRADE=1
-     has_cachyos_repos() { return 1; }
      wanted packages && install_packages ) >/dev/null 2>&1; then
-    pass "install_packages returns 0 when the CachyOS repo couldn't be added"
+    pass "install_packages returns 0 without adding a repository"
 else
-    fail "install_packages returns 0 when the CachyOS repo couldn't be added" \
+    fail "install_packages returns 0 without adding a repository" \
          "set -e would kill the run before any other step"
 fi
 
@@ -624,7 +567,7 @@ check_contains "the taskbar step says why it skipped" "no Plasma panel" "$out"
 # ── the Brave profile directory follows the Brave that's installed ────────────
 group "Brave profile directory"
 
-# brave-origin-bin (CachyOS) and upstream brave-bin are
+# brave-origin-bin and upstream brave-bin are
 # different builds with different profile directories. Writing the filter lists
 # and the KeePassXC manifest into the wrong one is silent: no error, no effect,
 # and the extension simply never reaches the database.
@@ -634,21 +577,15 @@ d="$( have() { [[ "$1" == brave ]]; }; brave_profile_dir )"
 check_eq "upstream brave installed -> Brave-Browser" "$HOME/.config/BraveSoftware/Brave-Browser" "$d"
 
 # Neither installed yet — this run may be about to install one. An existing
-# profile is the next best evidence; failing that, CachyOS's is the default.
+# profile is the next best evidence; failing that, Origin is the default.
 d="$( have() { false; }; HOME="$tmp/nobrave"; mkdir -p "$HOME/.config/BraveSoftware/Brave-Browser"; brave_profile_dir )"
 check_eq "no brave, but a Brave-Browser profile -> Brave-Browser" \
     "$tmp/nobrave/.config/BraveSoftware/Brave-Browser" "$d"
-# With nothing installed and no profile yet, the repos decide: brave-origin-bin
-# exists only in the CachyOS repos, so without them upstream Brave is the only
-# Brave this machine could end up running.
-d="$( have() { false; }; has_cachyos_repos() { true; }
+# With no installed browser or profile, use the Origin build in aur.txt.
+d="$( have() { false; }
       HOME="$tmp/nobrave2"; mkdir -p "$HOME"; brave_profile_dir )"
-check_eq "nothing to go on, CachyOS repos -> Brave-Origin" \
+check_eq "no browser or profile -> Brave-Origin" \
     "$tmp/nobrave2/.config/BraveSoftware/Brave-Origin" "$d"
-d="$( have() { false; }; has_cachyos_repos() { false; }
-      HOME="$tmp/nobrave3"; mkdir -p "$HOME"; brave_profile_dir )"
-check_eq "nothing to go on, Arch repos only -> Brave-Browser" \
-    "$tmp/nobrave3/.config/BraveSoftware/Brave-Browser" "$d"
 
 # ── the KeePassXC step must not need KDE ──────────────────────────────────────
 group "INI writing without kwriteconfig6"
@@ -2031,6 +1968,15 @@ bj_home="$tmp/bjhome"
 bj_user="${USER:-$(id -un)}"
 mkdir -p "$bj_home/.config/omarchy/plugins/$bj_user.bar" \
          "$bj_home/.config/omarchy/plugins/$bj_user.tray"
+# Synthetic complete patches keep layout tests independent of installed QML.
+bj_repo="$tmp/bjrepo"
+mkdir -p "$bj_repo/omarchy/patches"
+for spec in 'bar:Bar.qml:bar-islands' 'tray:Tray.qml:tray-collapse'; do
+    kind="${spec%%:*}"; rest="${spec#*:}"; qml="${rest%%:*}"; pname="${rest#*:}"
+    printf 'patched\n' > "$bj_home/.config/omarchy/plugins/$bj_user.$kind/$qml"
+    printf -- '--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n-stock\n+patched\n' "$qml" "$qml" \
+        > "$bj_repo/omarchy/patches/$pname.patch"
+done
 cat > "$bj_home/.config/omarchy/shell.json" <<'JSON'
 {
   "version": 1,
@@ -2048,7 +1994,7 @@ JSON
   OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
   OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
   OMARCHY_BAR_MONITORS=(DP-1)
-  omarchy_bar_layout ) >/dev/null 2>&1
+  REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 
 bj_read() { python -c "
 import json,sys
@@ -2080,7 +2026,7 @@ bj_once="$(cat "$bj_home/.config/omarchy/shell.json")"
   OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
   OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
   OMARCHY_BAR_MONITORS=(DP-1)
-  omarchy_bar_layout ) >/dev/null 2>&1
+  REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 check_eq "a second run changes nothing" "$bj_once" "$(cat "$bj_home/.config/omarchy/shell.json")"
 
 # Pointing shell.json at a plugin directory that isn't there is how you get a
@@ -2096,7 +2042,7 @@ PY
   OMARCHY_CLOCK_FORMAT="x"; OMARCHY_CLOCK_FORMAT_VERTICAL="x"
   OMARCHY_BAR_RIGHT_EXTRA=()
   OMARCHY_BAR_MONITORS=()
-  omarchy_bar_layout ) >/dev/null 2>&1
+  REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 if grep -q '"id": "'"$bj_user"'.bar"' "$bj2_home/.config/omarchy/shell.json"; then
     fail "no cloned bar id is written when the clone is missing" \
          "shell.json points at a plugin that doesn't exist — that's a blank bar"
@@ -2406,6 +2352,231 @@ if [[ -e "$fake_home/.local/bin/StreamHub.AppImage" || -e "$fake_home/.local/bin
 else
     pass "--dry-run downloads no AppImage"
 fi
+
+# ── regression cases from the script review ──────────────────────────────────
+group "Review regressions"
+
+# On a fresh machine the preceding dry-run package step has not installed
+# Flatpak. Even a function with that name must never be called in dry mode.
+out="$( have() { return 1; }
+        flatpak() { echo UNEXPECTED_FLATPAK; return 99; }
+        sudo() { echo UNEXPECTED_SUDO; return 99; }
+        DRY_RUN=1
+        install_flatpaks 2>&1 )"; rc=$?
+check_eq "Flatpak dry-run succeeds without Flatpak installed" 0 "$rc"
+check_contains "Flatpak dry-run still shows installation" "flatpak install -y --noninteractive" "$out"
+if [[ "$out" == *UNEXPECTED* ]]; then
+    fail "Flatpak dry-run invokes neither Flatpak nor sudo" "$out"
+else
+    pass "Flatpak dry-run invokes neither Flatpak nor sudo"
+fi
+
+# A matching version stamp selects the repair branch, not the download branch.
+# Test all eight callers with both their launcher and icon absent.
+repair_json="$tmp/repair-release.json"
+python - "$repair_json" <<'PY'
+import json, sys
+names = ['StreamHub.AppImage', 'ConsoleVault_1_amd64.AppImage',
+         'DiscRipper.AppImage', 'GridDown_1_amd64.AppImage',
+         'StalkerGammaGui-x86_64.AppImage', 'LorerimAutoinstall-x86_64.AppImage',
+         'WowWotlkAutoinstall-x86_64.AppImage', 'Music.AI.Player_1_amd64.AppImage',
+         'SHA256SUMS']
+with open(sys.argv[1], 'w') as f:
+    json.dump({'tag_name': 'v1', 'assets': [
+        {'name': n, 'browser_download_url': 'https://example.invalid/download/v1/' + n}
+        for n in names]}, f, indent=2)
+PY
+for app in streamhub consolevault discripper griddown gammagui lorerim wotlk musicai; do
+    repair_case="$tmp/repair-$app"
+    mkdir -p "$repair_case/data"
+    touch "$repair_case/app.AppImage"
+    printf 'v1\n' > "$repair_case/data/.version"
+    before="$(find "$repair_case" -type f -exec sha256sum {} + | sort)"
+    out="$( set -euo pipefail
+            DRY_RUN=1; APPS_DIR="$repair_case/apps"
+            prefix="${app^^}"
+            printf -v "${prefix}_DIR" '%s' "$repair_case/data"
+            printf -v "${prefix}_APPIMAGE" '%s' "$repair_case/app.AppImage"
+            github_api() { cat "$repair_json"; }
+            github_api_raw() { cat "$repair_json"; printf '\n200'; }
+            curl() { touch "$repair_case/UNEXPECTED_DOWNLOAD"; return 99; }
+            refresh_desktop_db() { touch "$repair_case/UNEXPECTED_REFRESH"; }
+            "install_$app" 2>&1 )"; rc=$?
+    check_eq "$app repair dry-run succeeds" 0 "$rc"
+    check_contains "$app dry-run reaches launcher repair" "Launcher would be recreated" "$out"
+    check_eq "$app repair dry-run changes no files" "$before" \
+        "$(find "$repair_case" -type f -exec sha256sum {} + | sort)"
+    [[ ! -d "$repair_case/apps" ]] && pass "$app repair dry-run creates no launcher directory" \
+        || fail "$app repair dry-run creates no launcher directory"
+done
+
+# Real repair must still write the launcher and icon; stub only the network
+# transfer and the system desktop index, keeping all writes in the fixture.
+repair_live="$tmp/repair-live"
+mkdir -p "$repair_live"
+( DRY_RUN=0; APPS_DIR="$repair_live/apps"
+  STREAMHUB_DIR="$repair_live/data"; STREAMHUB_APPIMAGE="$repair_live/app.AppImage"
+  curl() { printf 'icon' > "$3"; }
+  refresh_desktop_db() { touch "$repair_live/refreshed"; }
+  repair_app_launcher "$STREAMHUB_DIR" https://example.invalid/icon write_streamhub_desktop
+) >/dev/null 2>&1
+if [[ -f "$repair_live/apps/com.streamhub.app.desktop" && -f "$repair_live/data/icon.png" \
+   && -f "$repair_live/refreshed" ]]; then
+    pass "real launcher repair still writes files and refreshes the index"
+else
+    fail "real launcher repair still writes files and refreshes the index"
+fi
+
+# The first hunk would succeed and the second fail if run against live QML.
+patch_case="$tmp/atomic-patch"
+mkdir -p "$patch_case"
+printf 'alpha\n2\n3\n4\nunexpected\n' > "$patch_case/Bar.qml"
+chmod 640 "$patch_case/Bar.qml"
+cat > "$tmp/two-hunks.patch" <<'PATCH'
+--- a/Bar.qml
++++ b/Bar.qml
+@@ -1 +1 @@
+-alpha
++beta
+@@ -5 +5 @@
+-omega
++zeta
+PATCH
+before="$(sha256sum "$patch_case/Bar.qml")"
+omarchy_apply_patch "$patch_case" "$tmp/two-hunks.patch" Bar.qml >/dev/null 2>&1; rc=$?
+[[ $rc -ne 0 ]] && pass "a rejected QML hunk reports failure" || fail "a rejected QML hunk reports failure"
+check_eq "a failed patch leaves live QML unchanged" "$before" "$(sha256sum "$patch_case/Bar.qml")"
+check_eq "a failed patch leaves no temp, reject or backup files in the clone" \
+    "Bar.qml" "$(ls -A "$patch_case")"
+printf 'alpha\n2\n3\n4\nomega\n' > "$patch_case/Bar.qml"
+omarchy_apply_patch "$patch_case" "$tmp/two-hunks.patch" Bar.qml >/dev/null 2>&1; rc=$?
+check_eq "a complete QML patch succeeds" 0 "$rc"
+check_eq "both hunks reach the live file together" $'beta\n2\n3\n4\nzeta' "$(cat "$patch_case/Bar.qml")"
+check_eq "publishing QML preserves its permissions" 640 "$(stat -c %a "$patch_case/Bar.qml")"
+omarchy_patch_applied "$patch_case" "$tmp/two-hunks.patch"; rc=$?
+check_eq "the complete patch is recognized on a re-run" 0 "$rc"
+
+# Directory existence is insufficient: invalidate both previously selected
+# clones and check the layout actively falls back, including a moved tray.
+printf 'stock\n' > "$bj_home/.config/omarchy/plugins/$bj_user.bar/Bar.qml"
+printf 'stock\n' > "$bj_home/.config/omarchy/plugins/$bj_user.tray/Tray.qml"
+python - "$bj_home/.config/omarchy/shell.json" "$bj_user" <<'PY'
+import json, sys
+p, user = sys.argv[1:]
+d = json.load(open(p)); layout = d['bar']['layout']
+tray = next(e for e in layout['right'] if e['id'] == user + '.tray')
+layout['right'].remove(tray); layout['left'].append(tray)
+with open(p, 'w') as f: json.dump(d, f)
+PY
+( HOME="$bj_home"; DRY_RUN=0; REPO_DIR="$bj_repo"
+  omarchy_bar_layout ) >/dev/null 2>&1
+python - "$bj_home/.config/omarchy/shell.json" "$bj_user" <<'PY'
+import json, sys
+p, user = sys.argv[1:]; d = json.load(open(p))
+assert 'id' not in d['bar']
+assert any(e['id'] == 'omarchy.tray' for e in d['bar']['layout']['left'])
+assert all(e['id'] != user + '.tray' for items in d['bar']['layout'].values() for e in items)
+PY
+check_eq "unpatched clones fall back to stock bar and moved tray" 0 "$?"
+
+if printf '%s\n' "${real[@]}" | grep -qx smbclient; then
+    pass "the package list includes the share-discovery dependency"
+else
+    fail "the package list includes the share-discovery dependency"
+fi
+out="$( have() { return 1; }
+        sudo() { echo UNEXPECTED_SUDO; return 99; }
+        smb_ask 2>&1 )"; rc=$?
+check_eq "missing smbclient reports failure" 1 "$rc"
+check_contains "missing smbclient is diagnosed before prompting" "smbclient is not installed" "$out"
+if [[ "$out" == *UNEXPECTED_SUDO* || "$out" == *'Server (name or address)'* ]]; then
+    fail "missing smbclient neither prompts nor writes credentials" "$out"
+else
+    pass "missing smbclient neither prompts nor writes credentials"
+fi
+
+# NAS rendering tests exercise exact fstab matching, option preservation,
+# bookmark URI handling, atomic writes, ownership and dry-run behavior.
+if python -B "$TESTS_DIR/test_nas_mounts.py" > "$tmp/nas-python.log" 2>&1; then
+    pass "NAS configuration unit tests (11 cases)"
+else
+    fail "NAS configuration unit tests" "$(cat "$tmp/nas-python.log")"
+fi
+
+# Execute the installer orchestration with only privilege/systemd calls mocked.
+# Redirect its fstab path to a fixture; no real mount or daemon is touched.
+nas_case="$tmp/nas-integration"
+mkdir -p "$nas_case/home/.config/gtk-3.0"
+printf '# unrelated\nUUID=root / ext4 defaults 0 1\n' > "$nas_case/fstab"
+printf 'root-only-placeholder\n' > "$nas_case/creds"
+chmod 600 "$nas_case/creds"
+printf 'file://%s/mnt/More%%20Storage My custom NAS label\n' "$nas_case" \
+    > "$nas_case/home/.config/gtk-3.0/bookmarks"
+{
+    printf 'SMB_HOST=nas\nSMB_USER=example\nSMB_SHARES=(\n'
+    printf '  %q\n' "Storage:$nas_case/mnt/Storage" "More Storage:$nas_case/mnt/More Storage"
+    printf ')\n'
+} > "$nas_case/smb.conf"
+nas_run_fixture() (
+    HOME="$nas_case/home"
+    SMB_CONFIG="$nas_case/smb.conf"; SMB_CREDS="$nas_case/creds"
+    DRY_RUN="$1"
+    have() { [[ "$1" == mount.cifs ]] || command -v "$1" >/dev/null 2>&1; }
+    python() {
+        local script="$1" mode="$2"; shift 2
+        if [[ "$mode" == fstab ]]; then
+            shift
+            command python "$script" "$mode" "$nas_case/fstab" "$@"
+        else
+            command python "$script" "$mode" "$@"
+        fi
+    }
+    sudo() {
+        printf '%s\n' "$*" >> "$nas_case/commands"
+        case "$1" in
+            python) shift; python "$@" ;;
+            mkdir) shift; command mkdir "$@" ;;
+            systemctl) return 0 ;;
+            *) echo "UNEXPECTED privileged command: $*"; return 99 ;;
+        esac
+    }
+    configure_network_shares
+)
+creds_before="$(sha256sum "$nas_case/creds")"
+nas_run_fixture 0 > "$tmp/nas-integration.log" 2>&1; rc=$?
+check_eq "NAS installer configures a fresh fixture" 0 "$rc"
+check_eq "NAS setup preserves credentials content" "$creds_before" "$(sha256sum "$nas_case/creds")"
+check_eq "NAS setup preserves credentials permissions" 600 "$(stat -c %a "$nas_case/creds")"
+expected_unit="$(systemd-escape --path --suffix=automount -- "$nas_case/mnt/More Storage")"
+check_contains "NAS starts the escaped automount unit" "systemctl start $expected_unit" "$(cat "$nas_case/commands")"
+python - "$nas_case" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); commands = (p / 'commands').read_text().splitlines()
+reload = commands.index('systemctl daemon-reload')
+starts = [i for i, line in enumerate(commands) if line.startswith('systemctl start ')]
+assert len(starts) == 2 and all(i > reload for i in starts)
+assert not any(line.startswith(('mount ', 'umount ', 'systemctl restart ')) for line in commands)
+fstab = (p / 'fstab').read_text()
+assert fstab.count('x-systemd.automount') == 2
+assert fstab.count('x-gvfs-hide') == 2
+assert 'x-gvfs-show' not in fstab
+assert fstab.startswith('# unrelated\nUUID=root / ext4 defaults 0 1\n')
+bookmarks = (p / 'home/.config/gtk-3.0/bookmarks').read_text()
+assert bookmarks.count('My custom NAS label') == 1
+assert bookmarks.count('More%20Storage') == 1
+assert bookmarks.count('/mnt/Storage Storage') == 1
+PY
+check_eq "NAS reloads before activation and preserves custom bookmarks" 0 "$?"
+before="$(cat "$nas_case/fstab" "$nas_case/home/.config/gtk-3.0/bookmarks")"
+nas_run_fixture 0 > "$tmp/nas-integration-rerun.log" 2>&1
+check_eq "NAS rerun duplicates neither fstab entries nor bookmarks" "$before" \
+    "$(cat "$nas_case/fstab" "$nas_case/home/.config/gtk-3.0/bookmarks")"
+before="$(find "$nas_case" -type f -exec sha256sum {} + | sort)"
+nas_run_fixture 1 > "$tmp/nas-integration-dry.log" 2>&1; rc=$?
+check_eq "NAS dry-run completes" 0 "$rc"
+check_eq "NAS dry-run changes no files or privileged-command log" "$before" \
+    "$(find "$nas_case" -type f -exec sha256sum {} + | sort)"
 
 # ── summary ───────────────────────────────────────────────────────────────────
 printf '\n%s%d passed, %d failed%s\n' "$BOLD" "$PASS" "$FAIL" "$RESET"

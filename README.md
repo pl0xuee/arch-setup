@@ -30,8 +30,7 @@ will silently undo the changes.
 
 ## Two desktops
 
-Two separate questions get asked at the start of the run, and both are printed
-before anything is installed:
+The desktop is detected and printed before anything is installed:
 
 - **Which desktop?** — the running session decides whenever there is one:
   `XDG_CURRENT_DESKTOP` says what is on screen, where the installed markers are
@@ -42,10 +41,6 @@ before anything is installed:
   command, a TTY — does it fall back to what's installed: Omarchy's path
   (`/usr/share/omarchy`), then `plasmashell`. Override it with
   `--desktop kde|omarchy|other`.
-- **Are the CachyOS repos enabled?** — asked separately, via `pacman-conf`,
-  because CachyOS-with-something-else and Arch-with-the-CachyOS-repos-added are
-  both real machines. If they aren't, the signed `[cachyos]` repo is added so
-  the CachyOS-only packages install anyway. No AUR helper is used.
 
 What that changes:
 
@@ -57,31 +52,27 @@ What that changes:
 | Powerdevil idle settings | ✅ | skipped — Omarchy idles through its own shell |
 | `kscreen`, `qt6-imageformats` | ✅ | skipped — Plasma-only |
 | Bar, theme, wallpaper, Hyprland rules, monitors | skipped — no omarchy-shell | ✅ — see [The Omarchy desktop](#the-omarchy-desktop) |
-| Everything in `packages/pacman-cachyos.txt` | ✅ | ✅ — the `[cachyos]` repo is added first (see below) |
+| Brave Origin and Vesktop from `packages/aur.txt` | ✅ — yay or paru | ✅ — yay or paru |
 
 Nothing here fails the run. A skipped step says why, and the summary at the end
 lists what was left out.
 
-### Adding the CachyOS repo
+### Package sources
 
-On a box without it, `[cachyos]` is **appended** to `/etc/pacman.conf` — landing
-below `core`/`extra`/`multilib` — after CachyOS's signing key
-(`F3B607488DB35A47`) is imported and locally signed. `multilib` is enabled too,
-since Steam and the `lib32-*` packages live there. The original `pacman.conf` is
-saved to `pacman.conf.before-cachyos-setup`.
+The script uses the existing pacman repositories for `packages/pacman.txt` and
+an installed **yay or paru** for `packages/aur.txt`. The AUR lookup is explicit
+(`--aur`), so Brave Origin and Vesktop are not selected from a binary repository.
+Brave Origin uses [Brave's AUR package](https://brave.com/origin/linux/), and
+Vesktop uses the [upstream-recommended `vesktop-bin`](https://vesktop.dev/install/linux/).
+If neither helper is installed, the packages step stops before changing anything
+and explains what is missing. Both apps remain part of `--only packages`.
 
-The ordering is the whole point, and it is deliberately **not** what CachyOS's
-own `cachyos-repo.sh` does — that inserts `[cachyos]` *above* the Arch repos.
-The plain `cachyos` repo shares 90 package names with Arch's, among them
-`pacman`, `mesa`, `linux-firmware`, `mkinitcpio`, `sddm`, `xz` and `zstd`.
-Ordered first, the next `pacman -Syu` — which `omarchy-update` runs on its own —
-would start replacing Omarchy's base system with CachyOS builds. Ordered last,
-pacman takes every one of those names from Arch, and the only packages that come
-from CachyOS are the ones Arch doesn't carry at all.
-
-To undo it: delete the `[cachyos]` section from `/etc/pacman.conf`, then
-`sudo pacman -R cachyos-keyring cachyos-mirrorlist` and
-`sudo pacman-key --delete F3B607488DB35A47`.
+No CachyOS repository, signing key, mirrorlist, gaming bundles, Proton/Wine
+runners, ProtonUp-Qt, or extra gaming drivers are added. Gaming packages are
+left to the distro defaults, including Omarchy's defaults on Omarchy.
+Existing repositories and installed packages are not removed or migrated by
+this script. A machine configured by an older version keeps that configuration
+until it is changed separately.
 
 ## The Omarchy desktop
 
@@ -116,7 +107,8 @@ The bar and the tray are Omarchy's, and `/usr/share/omarchy` is overwritten by
 `omarchy plugin clone` is for — and the clone is patched with the diffs in
 `omarchy/patches/`.
 
-A patch that no longer applies is a **warning, never a failure**: Omarchy ships
+A patch is applied to a temporary copy and published only after every hunk
+succeeds. A patch that no longer applies is a **warning, never a failure**: Omarchy ships
 new shell code on its own schedule, and a bar that comes back stock is a far
 better outcome than a run that dies, or a half-patched QML file that stops the
 shell from starting at all. The sha256 of each upstream file the patches were
@@ -132,7 +124,8 @@ the bar leaves you with no bar and no error.
 
 ## Network shares
 
-SMB/CIFS shares are mounted at boot, but none of the details are in this repo.
+SMB/CIFS shares mount on demand through systemd, with folder bookmarks in the
+file-manager sidebar. None of the server details are in this repo.
 A server address, a login name and a list of share names are facts about one
 house — the repo carries the mechanism, the machine carries the values.
 
@@ -155,19 +148,31 @@ means. Mount points are `/mnt/<share name with spaces removed>`; a space in the
 share name itself becomes `\040` in `fstab`, which is the only place it is
 allowed to appear.
 
-Mounts are `nofail`, `_netdev` and `x-systemd.device-timeout=10`, so a server
-that is switched off — or a laptop somewhere else entirely — costs ten seconds
-and a warning rather than a failed boot.
+New entries use `x-systemd.automount`, `x-systemd.idle-timeout=60`, `_netdev`,
+`nofail`, and `x-gvfs-hide`. The installer reloads systemd and starts each
+`.automount` unit so the bookmarks work immediately and after boot. Opening a
+bookmark accesses the folder directly and lets systemd mount as root. Hiding
+the device entry prevents the competing file-manager mount attempt described
+in [NAS-MOUNT-HANDOFF.md](NAS-MOUNT-HANDOFF.md). Credentials remain root-owned
+and mode `0600`; no active share is forcibly unmounted.
 
-To change what is mounted, edit `smb.conf` and re-run. To be asked everything
-again, delete it.
+Bookmarks are added to the desktop user's `~/.config/gtk-3.0/bookmarks` by URI,
+preserving custom labels and unrelated entries. Reruns migrate matching older
+fstab entries only when their source, mount point and credentials path match.
+They replace `x-gvfs-show`, add automounting, and preserve existing permission,
+protocol and idle-timeout settings. The ignored CIFS `device-timeout` option is
+removed; no mount timeout is imposed. Changed files are backed up first.
+
+Edit `smb.conf` to add shares. Removing or changing an existing share also
+requires removing its old fstab entry and bookmark separately; the installer
+does not remove unrelated entries. Delete `smb.conf` to be asked again.
 
 ## What goes where
 
 | File | |
 |---|---|
 | `packages/pacman.txt` | repo packages that exist on CachyOS *and* Arch |
-| `packages/pacman-cachyos.txt` | packages only in the CachyOS repos (the repo is added if missing) |
+| `packages/aur.txt` | Brave Origin and Vesktop, installed explicitly from the AUR |
 | `packages/pacman-kde.txt` | packages only worth having on Plasma |
 | `packages/flatpak.txt` | Dropbox |
 | `packages/taskbar.txt` | pinned launchers, in order (KDE only) |
