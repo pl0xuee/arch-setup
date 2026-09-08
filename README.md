@@ -123,11 +123,11 @@ made against is recorded in `install.sh`, so drift says so in the run log, and
 `./tests/run.sh` checks the patches still apply to the installed Omarchy — which
 is the earlier warning.
 
-One of them also carries a workaround for an upstream bug: a cloned `bar`-kind
-plugin cannot load at all, because `Bar.qml` declares required properties that
-the host's `source:`-based Loader can't set
-([#6915](https://github.com/basecamp/omarchy/issues/6915)). Without it, cloning
-the bar leaves you with no bar and no error.
+The patches target Omarchy 4.0.3-1. That version includes the upstream fix for
+cloned bar loading, so the island patch preserves its property defaults and
+registry initialization. The obsolete loading workaround was removed because
+it rejected the updated bar and prevented the islands and monitor filter from
+being enabled.
 
 ## Network shares
 

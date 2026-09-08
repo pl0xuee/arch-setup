@@ -2124,8 +2124,20 @@ if have patch && [[ -r /usr/share/omarchy/shell/plugins/bar/Bar.qml ]]; then
                 "tray-collapse:/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml:Tray.qml"; do
         pname="${pair%%:*}"; rest="${pair#*:}"; upstream="${rest%%:*}"; fname="${rest##*:}"
         pdir="$(mktemp -d)"; cp "$upstream" "$pdir/$fname"
-        if patch -p1 --forward -s -d "$pdir" < "$REPO_ROOT/omarchy/patches/$pname.patch" >/dev/null 2>&1; then
+        if patch -p1 --forward --batch --fuzz=0 --dry-run -s -d "$pdir" < "$REPO_ROOT/omarchy/patches/$pname.patch" >/dev/null 2>&1; then
             pass "$pname.patch still applies to this machine's $fname"
+            # Exercise the installer's staged publication on a fresh upstream
+            # copy, not just patch(1) or an already-customized live plugin.
+            if omarchy_apply_patch "$pdir" "$REPO_ROOT/omarchy/patches/$pname.patch" "$fname" >/dev/null 2>&1; then
+                pass "the installer applies $pname.patch to a fresh plugin copy"
+            else
+                fail "the installer applies $pname.patch to a fresh plugin copy"
+            fi
+            if omarchy_patch_applied "$pdir" "$REPO_ROOT/omarchy/patches/$pname.patch"; then
+                pass "$pname.patch is recognized after applying to this machine's $fname"
+            else
+                fail "$pname.patch is recognized after applying" "a re-run would disable the clone"
+            fi
         else
             fail "$pname.patch still applies to this machine's $fname" \
                  "regenerate it against the installed Omarchy, or the bar comes back stock"

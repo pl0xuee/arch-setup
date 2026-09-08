@@ -279,11 +279,11 @@ OMARCHY_PLUGINS_GIT=(
 OMARCHY_DEFAULT_AGENT=claude
 
 # sha256 of the two upstream files our QML patches were generated against
-# (Omarchy 4.0.0-1). A mismatch doesn't stop the patch being tried — it just
+# (Omarchy 4.0.3-1). A mismatch doesn't stop the patch being tried — it just
 # means the warning fires first, so a bar that comes back stock after an
 # `omarchy update` has an obvious explanation in the run log.
-OMARCHY_BAR_BASELINE_SHA=8bbe27ad7c617da1a3770fd5731b8cc79935ac34f04873c3933f7ff581a7cb15
-OMARCHY_TRAY_BASELINE_SHA=36d26f81d8e37561cdd4addc3ccd0df0490415d196d518ead88ea95af0d02466
+OMARCHY_BAR_BASELINE_SHA=9874c0f36271840b43002890ae333c83097df7f4cff0bade81536a41ed83590b
+OMARCHY_TRAY_BASELINE_SHA=6566c548c76e56315589a126965eb686a6be812b1106d618045fee01a5095dd0
 
 SKIP_UPGRADE=0
 DRY_RUN=0

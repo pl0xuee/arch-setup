@@ -1,27 +1,6 @@
 --- a/Bar.qml
 +++ b/Bar.qml
-@@ -12,14 +12,17 @@
-   id: root
- 
-   // The omarchy-shell host injects omarchyPath from OMARCHY_PATH.
--  required property string omarchyPath
-+  // Plugin bars are mounted through a `source:` Loader, which cannot set
-+  // required properties — the host injects these in configureBar() right
-+  // after load instead, so they are plain properties with safe defaults.
-+  property string omarchyPath: ""
-   // Injected by the host shell so bar slots can resolve enabled widgets.
--  required property var barWidgetRegistry
-+  property var barWidgetRegistry: ({ widgets: {} })
-   // Injected by the host shell every time shell.json is reloaded. Holds the
-   // `bar:` subtree: position, centerAnchor, layout. The host owns file IO;
-   // the bar just renders whatever it's handed. The bar font follows the
-   // OS-level fontconfig monospace binding — it is not stored in shell.json.
--  required property var barConfig
-+  property var barConfig: null
-   // Injected by the host shell. Used for shell-wide actions such as opening
-   // settings and persisting inline widget state.
-   property var shell: null
-@@ -329,6 +332,15 @@
+@@ -555,6 +555,15 @@
    readonly property bool vertical: position === "left" || position === "right"
    readonly property int barSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
  
@@ -37,8 +16,8 @@
    function normalizePosition(value) {
      return BarModel.normalizePosition(value)
    }
-@@ -948,8 +960,30 @@
-     onFileChanged: barHiddenProbe.running = true
+@@ -1193,8 +1202,30 @@
+     }
    }
  
 +  // Which screens get a bar. Stock Omarchy puts one on every screen; listing
@@ -69,7 +48,7 @@
  
      delegate: Component {
        BarPanel {
-@@ -1018,7 +1052,7 @@
+@@ -1263,7 +1294,7 @@
  
      implicitWidth: root.vertical ? root.barSize : 0
      implicitHeight: root.vertical ? 0 : root.barSize
@@ -78,7 +57,7 @@
      surfaceFormat.opaque: false
      WlrLayershell.namespace: "omarchy-bar"
      WlrLayershell.layer: WlrLayer.Top
-@@ -1109,15 +1143,27 @@
+@@ -1355,15 +1386,27 @@
  
          CenterModules { anchors.fill: parent }
  
@@ -108,7 +87,7 @@
            anchors.verticalCenter: parent.verticalCenter
          }
        }
-@@ -1131,15 +1177,27 @@
+@@ -1377,15 +1420,27 @@
  
          CenterModules { anchors.fill: parent }
  
@@ -138,7 +117,7 @@
            anchors.horizontalCenter: parent.horizontalCenter
          }
        }
-@@ -1275,6 +1333,22 @@
+@@ -1521,6 +1576,22 @@
      return idx === -1 ? null : entries[idx]
    }
  
@@ -161,7 +140,7 @@
    component LeftModules: ModuleList {
      entries: root.layoutEntries("left")
      region: "left"
-@@ -1309,35 +1383,45 @@
+@@ -1555,35 +1626,45 @@
            onHoveredChanged: root.setCenterSectionHovered(hovered)
          }
  
@@ -232,7 +211,7 @@
          }
        }
      }
-@@ -1354,35 +1438,45 @@
+@@ -1600,35 +1681,45 @@
            onHoveredChanged: root.setCenterSectionHovered(hovered)
          }
  
