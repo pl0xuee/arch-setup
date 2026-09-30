@@ -219,19 +219,19 @@ else
     pass "no package name contains a space"
 fi
 
-mapfile -t fp < <(read_list "$REPO_ROOT/packages/flatpak.txt")
-check_eq "flatpak.txt parses to the Dropbox app id" "com.dropbox.Client" "${fp[*]}"
+# No program is installed through Flatpak, on any desktop.
+if [[ -e "$REPO_ROOT/packages/flatpak.txt" ]] || grep -qE 'flatpak (install|remote-add)' "$SCRIPT"; then
+    fail "nothing is installed through Flatpak"
+else
+    pass "nothing is installed through Flatpak"
+fi
 
-# A stock CachyOS install has no flatpak binary — verified in a VM. If the
-# flatpak.txt list is non-empty, pacman.txt MUST install flatpak, or the
-# Flatpak step dies on a fresh machine. (It doesn't die here, on a box that
-# already has it — which is exactly why this needs asserting.)
-if [[ ${#fp[@]} -gt 0 ]]; then
-    if printf '%s\n' "${real[@]}" | grep -qx flatpak; then
-        pass "pacman.txt installs flatpak (flatpak.txt is non-empty)"
-    else
-        fail "pacman.txt installs flatpak" "flatpak.txt lists apps but flatpak isn't in pacman.txt"
-    fi
+mapfile -t om < <(read_list "$REPO_ROOT/packages/pacman-omarchy.txt")
+check_eq "pacman-omarchy.txt parses to the Proton CLI" "proton-vpn-cli" "${om[*]}"
+if printf '%s\n' "${real[@]}" | grep -qx 'proton-vpn-gtk-app\|proton-vpn-cli'; then
+    fail "no Proton client is in the shared list" "it belongs to Omarchy's OmaProton widget only"
+else
+    pass "no Proton client is in the shared list"
 fi
 
 # rsync arrived with the desktop-rice step and was kept after it was removed.
@@ -767,16 +767,11 @@ else
          "ensure_codex_cli is missing the official install command"
 fi
 
-# pacman/flatpak must never stop to ask either.
+# pacman must never stop to ask either.
 if grep -qE 'pacman -S(yu)? .*--noconfirm' "$SCRIPT"; then
     pass "pacman runs with --noconfirm"
 else
     fail "pacman runs with --noconfirm"
-fi
-if grep -qF 'flatpak install -y --noninteractive' "$SCRIPT"; then
-    pass "flatpak runs non-interactively"
-else
-    fail "flatpak runs non-interactively"
 fi
 
 # ── GitHub release-API parsing ────────────────────────────────────────────────
@@ -2023,7 +2018,8 @@ fi
 bj_home="$tmp/bjhome"
 bj_user="${USER:-$(id -un)}"
 mkdir -p "$bj_home/.config/omarchy/plugins/$bj_user.bar" \
-         "$bj_home/.config/omarchy/plugins/$bj_user.tray"
+         "$bj_home/.config/omarchy/plugins/$bj_user.tray" \
+         "$bj_home/.config/omarchy/plugins/crmne.hyprmoncfg"
 # Synthetic complete patches keep layout tests independent of installed QML.
 bj_repo="$tmp/bjrepo"
 mkdir -p "$bj_repo/omarchy/patches"
@@ -2048,7 +2044,7 @@ cat > "$bj_home/.config/omarchy/shell.json" <<'JSON'
 JSON
 ( HOME="$bj_home"; DESKTOP=omarchy; DRY_RUN=0
   OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
-  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
+  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg acme.not-installed)
   OMARCHY_BAR_MONITORS=(DP-1)
   REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 
@@ -2066,6 +2062,8 @@ check_eq "bar.id points at the cloned bar"  "$bj_user.bar" "$(bj_read | sed -n 1
 check_eq "the tray entry is swapped for the clone, in place" \
          "$bj_user.tray,omarchy.dropbox,crmne.hyprmoncfg,omarchy.power" "$(bj_read | sed -n 2p)"
 check_eq "the clock format is applied" "ddd d MMM h:mm AP" "$(bj_read | sed -n 3p)"
+# (acme.not-installed is in the extras list too: a third-party widget whose
+# plugin never landed must not be written into the bar as a dangling id.)
 
 # The monitor list only means anything to the patched clone, but writing it is
 # harmless on a stock bar, which has no such key and ignores it.
@@ -2080,7 +2078,7 @@ fi
 bj_once="$(cat "$bj_home/.config/omarchy/shell.json")"
 ( HOME="$bj_home"; DESKTOP=omarchy; DRY_RUN=0
   OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
-  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg)
+  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg acme.not-installed)
   OMARCHY_BAR_MONITORS=(DP-1)
   REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 check_eq "a second run changes nothing" "$bj_once" "$(cat "$bj_home/.config/omarchy/shell.json")"
@@ -2104,6 +2102,31 @@ if grep -q '"id": "'"$bj_user"'.bar"' "$bj2_home/.config/omarchy/shell.json"; th
          "shell.json points at a plugin that doesn't exist — that's a blank bar"
 else
     pass "no cloned bar id is written when the clone is missing"
+fi
+
+# A plugin installed by hand from its README usually has an origin without the
+# .git suffix. That is still the same plugin, and `omarchy plugin add` on it
+# would fail with "already installed" and a warning on every run.
+pg_home="$tmp/pghome"; pg_bin="$tmp/pgbin"; pg_log="$tmp/pg.log"
+mkdir -p "$pg_home/.config/omarchy/plugins" "$pg_bin"
+git init -q "$pg_home/.config/omarchy/plugins/acme.widget"
+git -C "$pg_home/.config/omarchy/plugins/acme.widget" remote add origin https://example.com/acme/widget/
+printf '#!/bin/sh\necho "$*" >> %q\n' "$pg_log" > "$pg_bin/omarchy"
+chmod +x "$pg_bin/omarchy"
+: > "$pg_log"
+( HOME="$pg_home"; PATH="$pg_bin:$PATH"; DRY_RUN=0
+  OMARCHY_PLUGINS_GIT=(https://example.com/acme/widget.git https://example.com/acme/other.git)
+  omarchy_clone_and_patch() { :; }
+  omarchy_plugins ) >/dev/null 2>&1
+if grep -q 'acme/widget' "$pg_log"; then
+    fail "a plugin cloned without the .git suffix counts as installed" "$(cat "$pg_log")"
+else
+    pass "a plugin cloned without the .git suffix counts as installed"
+fi
+if grep -q '^plugin add https://example.com/acme/other.git --yes$' "$pg_log"; then
+    pass "a missing plugin is added without --enable (the layout step places it)"
+else
+    fail "a missing plugin is added without --enable (the layout step places it)" "$(cat "$pg_log")"
 fi
 
 # ── the QML patches ───────────────────────────────────────────────────────────
@@ -2424,20 +2447,24 @@ fi
 # ── regression cases from the script review ──────────────────────────────────
 group "Review regressions"
 
-# On a fresh machine the preceding dry-run package step has not installed
-# Flatpak. Even a function with that name must never be called in dry mode.
-out="$( have() { return 1; }
-        flatpak() { echo UNEXPECTED_FLATPAK; return 99; }
-        sudo() { echo UNEXPECTED_SUDO; return 99; }
-        DRY_RUN=1
-        install_flatpaks 2>&1 )"; rc=$?
-check_eq "Flatpak dry-run succeeds without Flatpak installed" 0 "$rc"
-check_contains "Flatpak dry-run still shows installation" "flatpak install -y --noninteractive" "$out"
-if [[ "$out" == *UNEXPECTED* ]]; then
-    fail "Flatpak dry-run invokes neither Flatpak nor sudo" "$out"
+# Dropbox is Omarchy's own service. With the old Flatpak still on disk it is
+# skipped, since two clients would sync one folder, and in a dry run the
+# installer is only shown.
+db_home="$tmp/dbhome"; mkdir -p "$db_home/.local/share/flatpak/app/com.dropbox.Client"
+out="$( HOME="$db_home"; DRY_RUN=1; FLATPAK_SYSTEM_DIR="$tmp/no-such-dir"
+        omarchy-install-service-dropbox() { echo UNEXPECTED_INSTALL; }
+        omarchy_dropbox 2>&1 )"
+check_contains "Dropbox waits while the Flatpak version is installed" "flatpak uninstall com.dropbox.Client" "$out"
+if [[ "$out" == *UNEXPECTED_INSTALL* ]]; then
+    fail "the Flatpak Dropbox blocks Omarchy's installer" "$out"
 else
-    pass "Flatpak dry-run invokes neither Flatpak nor sudo"
+    pass "the Flatpak Dropbox blocks Omarchy's installer"
 fi
+out="$( HOME="$tmp/dbhome-empty"; DRY_RUN=1; FLATPAK_SYSTEM_DIR="$tmp/no-such-dir"
+        pacman() { return 1; }
+        have() { [[ "$1" == omarchy-install-service-dropbox ]] || command -v "$1" >/dev/null 2>&1; }
+        omarchy_dropbox 2>&1 )"
+check_contains "Dropbox uses Omarchy's own installer" "omarchy-install-service-dropbox" "$out"
 
 # A matching version stamp selects the repair branch, not the download branch.
 # Test all eight callers with both their launcher and icon absent.

@@ -1,0 +1,9 @@
+# Packages that are only worth having on Omarchy.
+#
+# Installed ONLY when the desktop step detects Omarchy. Each one backs an
+# Omarchy shell widget, and is no use without it.
+
+# The CLI, not the GTK app: the OmaProton VPN bar widget (an Omarchy plugin,
+# see install.sh) drives it, and the desktop app can't hold a connection at
+# the same time.
+proton-vpn-cli               # ProtonVPN CLI, driven by the OmaProton VPN widget

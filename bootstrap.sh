@@ -34,7 +34,15 @@ command -v git >/dev/null 2>&1 || {
 
 if [[ -d "$DEST/.git" ]]; then
     echo "Updating $DEST..."
-    git -C "$DEST" pull --ff-only || echo "  (couldn't fast-forward — using what's there)"
+    # Stop rather than quietly running an old install.sh: a checkout with local
+    # edits or a diverged branch can't fast-forward, and the one line saying so
+    # would scroll away under the whole run.
+    if ! git -C "$DEST" pull --ff-only; then
+        echo "error: couldn't update $DEST to the latest version (local changes, or" >&2
+        echo "       a branch that has diverged). Sort that out with git, or run" >&2
+        echo "       $DEST/install.sh directly to use the copy that's there." >&2
+        exit 1
+    fi
 else
     echo "Cloning into $DEST..."
     mkdir -p "$(dirname "$DEST")"
@@ -45,8 +53,10 @@ chmod +x "$DEST/install.sh"
 
 # When this script is itself being piped from curl, our stdin IS that pipe, and
 # it's at EOF. Hand install.sh the real terminal instead, so sudo can prompt for
-# a password and the run doesn't die at the first hurdle.
-if [[ -e /dev/tty ]]; then
+# a password and the run doesn't die at the first hurdle. Opening it is the
+# test, not -e: the node exists even with no controlling terminal (ssh without
+# -t, CI), and there the redirect would fail and take the exec with it.
+if { : </dev/tty; } 2>/dev/null; then
     exec "$DEST/install.sh" "$@" < /dev/tty
 else
     exec "$DEST/install.sh" "$@"

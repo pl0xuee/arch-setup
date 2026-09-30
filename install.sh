@@ -266,13 +266,17 @@ OMARCHY_BAR_MONITORS=(
 
 # Bar widgets added to the right section, in order, directly after the tray.
 OMARCHY_BAR_RIGHT_EXTRA=(
-    omarchy.dropbox         # the Dropbox flatpak this script installs
+    io.github.grichard99.omaproton-vpn  # Proton VPN panel (the plugin below)
+    omarchy.dropbox         # Omarchy's own Dropbox service, installed below
     crmne.hyprmoncfg        # multi-monitor layout switcher (the plugin below)
 )
 
-# Third-party shell plugins, installed with `omarchy plugin add`.
+# Third-party shell plugins, installed with `omarchy plugin add`. They're added
+# without --enable: that drops each widget directly after the tray in install
+# order, so the bar-layout step places them instead, in the order listed above.
 OMARCHY_PLUGINS_GIT=(
     https://github.com/crmne/omarchy-hyprmoncfg.git
+    https://github.com/grichard99/omaproton-vpn.git
 )
 
 # Which AI agent Omarchy's menu and keybindings launch. Empty leaves it unset.
@@ -624,7 +628,7 @@ Usage: ./install.sh [options]
 Options:
   --dry-run       Print every command that would run, change nothing
   --only STEP     Run one step only:
-                    packages | flatpak | agenttilecli | streamhub | consolevault
+                    packages | agenttilecli | streamhub | consolevault
                     discripper | griddown | gammagui | lorerim | wotlk
                     musicai | config | omarchy
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
@@ -637,7 +641,7 @@ Steps:
                   are needed for a working setup, so they run by default —
                   there is nothing to do by hand after this script.
   omarchy         The Omarchy desktop: shell text size, bar layout and widgets,
-                  the patched bar/tray plugins, theme and wallpaper, Hyprland
+                  the patched bar/tray plugins, Dropbox, theme and wallpaper, Hyprland
                   window rules, monitors and input. Skipped on any other
                   desktop.
 
@@ -669,7 +673,7 @@ while [[ $# -gt 0 ]]; do
         # Guard the arg count first: `shift 2` with only one argument left
         # returns non-zero, and set -e would then exit silently — no usage, no
         # error, nothing. `./install.sh --only` would just print nothing and fail.
-        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy)"
+        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
         # Same arg-count guard as --only, for the same reason: `shift 2` with
@@ -684,8 +688,8 @@ done
 
 if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
-        packages|flatpak|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config|omarchy) ;;
-        *) die "--only takes: packages | flatpak | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy" ;;
+        packages|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config|omarchy) ;;
+        *) die "--only takes: packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy" ;;
     esac
 fi
 if [[ -n "$DESKTOP_FORCED" ]]; then
@@ -717,7 +721,7 @@ preflight() {
     # missing python would otherwise surface as a confusing checksum failure.
     have python || die "python is not installed (needed for checksum + JSON handling)."
 
-    for f in "$PKG_DIR/pacman.txt" "$PKG_DIR/aur.txt" "$PKG_DIR/flatpak.txt"; do
+    for f in "$PKG_DIR/pacman.txt" "$PKG_DIR/aur.txt"; do
         [[ -f "$f" ]] || die "missing package list: $f"
     done
 
@@ -816,7 +820,23 @@ install_packages() {
     mapfile -t pkgs < <(read_list "$PKG_DIR/pacman.txt")
     pkgs+=("${cachyos_pkgs[@]}")
 
+    # Omarchy-only packages: things that exist to back an Omarchy shell widget.
+    if [[ -f "$PKG_DIR/pacman-omarchy.txt" ]]; then
+        mapfile -t extra < <(read_list "$PKG_DIR/pacman-omarchy.txt")
+        if [[ ${#extra[@]} -gt 0 ]]; then
+            if [[ "$DESKTOP" == omarchy ]]; then
+                pkgs+=("${extra[@]}")
+            else
+                skip "not Omarchy — skipping ${#extra[@]} Omarchy-only packages"
+                report "Packages" "skipped (not Omarchy): ${extra[*]}"
+            fi
+        fi
+    else
+        warn "missing $PKG_DIR/pacman-omarchy.txt — the Omarchy-only packages will NOT be installed"
+    fi
+
     # Plasma-only packages are additive; the shared list works on either desktop.
+    extra=()
     if [[ ! -f "$PKG_DIR/pacman-kde.txt" ]]; then
         warn "missing $PKG_DIR/pacman-kde.txt — the Plasma-only packages will NOT be installed"
     else
@@ -871,7 +891,7 @@ install_packages() {
         # NOT `[[ ... ]] && report ...`. As the last command of the function that
         # would return 1 whenever new_wanted is empty (packages upgraded rather
         # than newly installed, say), and `set -e` would then kill the whole run
-        # right here — no flatpaks, no apps, no config, no summary, no message.
+        # right here — no apps, no config, no summary, no message.
         if [[ ${#new_wanted[@]} -gt 0 ]]; then
             report "" "${new_wanted[*]}"
         fi
@@ -888,75 +908,7 @@ install_packages() {
     return 0
 }
 
-# ── 2. flatpaks ───────────────────────────────────────────────────────────────
-install_flatpaks() {
-    step "Flatpaks"
-
-    # flatpak is NOT on a stock CachyOS install, so pacman.txt installs it. If
-    # it's missing here, the package step was skipped (--only flatpak) rather
-    # than anything being broken.
-
-    local apps_dry=()
-    if [[ $DRY_RUN -eq 1 ]]; then
-        # Even read-only flatpak queries ('remotes', 'info') scaffold
-        # ~/.local/share/flatpak and ~/.cache/flatpak on first use. That's a
-        # filesystem change, and a dry run promises not to make any — so in dry
-        # mode we don't invoke flatpak at all, we just say what we'd do.
-        run sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-        mapfile -t apps_dry < <(read_list "$PKG_DIR/flatpak.txt")
-        local a
-        for a in "${apps_dry[@]}"; do
-            run sudo flatpak install -y --noninteractive flathub "$a"
-        done
-        return
-    fi
-
-    have flatpak || die "flatpak is not installed — run the packages step first (it's in packages/pacman.txt)."
-
-    # --system, not the default (which lists user AND system remotes). We install
-    # system-wide, so a Flathub remote that exists only in the *user* scope — as
-    # Discover tends to add it — would satisfy an unscoped check while the system
-    # install still fails with "Remote 'flathub' not found".
-    #
-    # remote-add --if-not-exists is idempotent anyway; the check is only here so
-    # a re-run can say "already configured" instead of silently doing nothing.
-    if flatpak remotes --system --columns=name 2>/dev/null | grep -qx flathub; then
-        skip "Flathub remote already configured"
-    else
-        info "Adding Flathub remote..."
-        run sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-    fi
-
-    local apps=()
-    mapfile -t apps < <(read_list "$PKG_DIR/flatpak.txt")
-    [[ ${#apps[@]} -gt 0 ]] || { skip "no flatpaks listed"; return; }
-
-    local app installed=() already=()
-    for app in "${apps[@]}"; do
-        if flatpak info "$app" >/dev/null 2>&1; then
-            skip "$app (already installed)"
-            already+=("$app")
-        else
-            info "Installing $app..."
-            installed+=("$app")
-            # As root, deliberately. A system-scope install is a privileged
-            # operation that flatpak routes through polkit, and polkit needs an
-            # interactive agent — so an unprivileged 'flatpak install' dies with
-            # "Deploy not allowed for user" over SSH, and pops an auth dialog
-            # mid-run on a desktop. sudo sidesteps both.
-            run sudo flatpak install -y --noninteractive flathub "$app"
-            ok "$app"
-        fi
-    done
-
-    if [[ ${#installed[@]} -gt 0 ]]; then
-        report "Flatpaks" "installed ${installed[*]}"
-    else
-        report "Flatpaks" "already present (${already[*]})"
-    fi
-}
-
-# ── 3. AgentTileCLI (build from source) ───────────────────────────────────────
+# ── 2. AgentTileCLI (build from source) ───────────────────────────────────────
 # Rust + GTK4/VTE4. Its own install.sh builds the release binary and drops a
 # .desktop file + icon into ~/.local. We clone to a permanent path because the
 # app's "check for updates" pulls and rebuilds from this same clone.
@@ -1163,7 +1115,7 @@ ensure_codex_cli() {
     fi
 }
 
-# ── 4. StreamHub (prebuilt AppImage) ──────────────────────────────────────────
+# ── 3. StreamHub (prebuilt AppImage) ──────────────────────────────────────────
 # Fetched from GitHub Releases rather than built: the release AppImage bundles
 # castLabs Electron (Widevine), which is what makes Netflix/Prime actually play.
 # The app updates itself in place afterwards, so this normally runs once — but
@@ -1378,7 +1330,7 @@ prune_competing_launchers() {
     return 0
 }
 
-# ── 5. ConsoleVault (prebuilt AppImage) ───────────────────────────────────────
+# ── 4. ConsoleVault (prebuilt AppImage) ───────────────────────────────────────
 # A Tauri launcher for a physical ROM collection (SNES/N64/PS1/PS2/PS3). Like
 # StreamHub it's a self-updating AppImage fetched from GitHub Releases, so this
 # normally runs once but is version-stamped to pick up a newer release on re-run.
@@ -1513,7 +1465,7 @@ StartupWMClass=ConsoleVault
 EOF
 }
 
-# ── 6. Disc Ripper (prebuilt AppImage) ────────────────────────────────────────
+# ── 5. Disc Ripper (prebuilt AppImage) ────────────────────────────────────────
 # A PySide6/Qt app that auto-detects a disc, rips it to H.265 and names the output
 # for Plex/Jellyfin. Same shape as StreamHub/ConsoleVault — a GitHub-Releases
 # AppImage under a stable name — but its release ships no signature or checksum, so
@@ -1651,7 +1603,7 @@ StartupWMClass=discripper
 EOF
 }
 
-# ── 7. GridDown (prebuilt AppImage) ───────────────────────────────────────────
+# ── 6. GridDown (prebuilt AppImage) ───────────────────────────────────────────
 # Offline US maps — streets, forest service roads, trails and terrain that work with
 # no internet. Same shape as ConsoleVault (Tauri, updater on, minisign-signed
 # release), so the download is checked against the embedded public key before it's
@@ -1806,7 +1758,7 @@ StartupWMClass=griddown
 EOF
 }
 
-# ── 8. Stalker GAMMA GUI (prebuilt AppImage) ──────────────────────────────────
+# ── 7. Stalker GAMMA GUI (prebuilt AppImage) ──────────────────────────────────
 # An Avalonia/.NET GUI that downloads, installs, updates and launches
 # S.T.A.L.K.E.R. GAMMA via Steam/Proton. Same GitHub-Releases-AppImage shape as
 # the others but with no in-app updater: the version stamp is what picks up a
@@ -1949,7 +1901,7 @@ StartupWMClass=StalkerGamma.Gui
 EOF
 }
 
-# ── 9. LoreRim Autoinstall (prebuilt AppImage) ────────────────────────────────
+# ── 8. LoreRim Autoinstall (prebuilt AppImage) ────────────────────────────────
 # An Avalonia/.NET GUI that installs the LoreRim Wabbajack modlist for Skyrim —
 # Steam, Proton and Nexus handled automatically. Same GitHub-Releases-AppImage
 # shape as Stalker GAMMA GUI: no in-app updater, so the version stamp on re-run
@@ -2094,7 +2046,7 @@ MimeType=x-scheme-handler/jackify;
 EOF
 }
 
-# ── 10. WotLK Autoinstall (prebuilt AppImage) ─────────────────────────────────
+# ── 9. WotLK Autoinstall (prebuilt AppImage) ──────────────────────────────────
 # An Avalonia/.NET GUI that installs a World of Warcraft 3.3.5a client for a
 # local server — client download, realmlist, addons and a Steam/Proton shortcut.
 # Same GitHub-Releases-AppImage shape as Stalker GAMMA GUI and LoreRim: no
@@ -2265,7 +2217,7 @@ StartupWMClass=WowWotlk.Gui
 EOF
 }
 
-# ── 11. Music AI Player (prebuilt AppImage) ───────────────────────────────────
+# ── 10. Music AI Player (prebuilt AppImage) ───────────────────────────────────
 # A local music player for long coding sessions — SQLite library, crossfade,
 # shuffle, playlists, visualizer, tray and media keys. Same shape as ConsoleVault
 # and GridDown (Tauri, updater on, minisign-signed release), so the download is
@@ -2411,7 +2363,7 @@ StartupWMClass=music-ai-player
 EOF
 }
 
-# ── 12. system config ─────────────────────────────────────────────────────────
+# ── 11. system config ─────────────────────────────────────────────────────────
 # ── network shares ────────────────────────────────────────────────────────────
 #
 # Mount SMB/CIFS shares at boot, from settings that live on the machine rather
@@ -2444,7 +2396,8 @@ smb_ask() {
     # the scrollback, and on a curl|bash run stdin is the pipe, not the keyboard.
     printf '   Password: '
     stty -echo </dev/tty 2>/dev/null || true
-    read -r pass </dev/tty || { stty echo </dev/tty 2>/dev/null || true; return 1; }
+    # IFS= so a password with a leading or trailing space is kept as typed.
+    IFS= read -r pass </dev/tty || { stty echo </dev/tty 2>/dev/null || true; return 1; }
     stty echo </dev/tty 2>/dev/null || true
     printf '\n\n'
 
@@ -2475,9 +2428,27 @@ smb_ask() {
         return 1
     fi
 
-    printf '   Found on //%s:\n' "$host"
+    # One folder per share, named after it with the spaces taken out. Two shares
+    # that differ only by spaces ("My Media", "MyMedia") would land on the same
+    # folder, so a later one gets a -2, -3 ... suffix instead.
+    local base mp i n
+    local -a mounts=()
+    local -A taken=()
     for name in "${found[@]}"; do
-        printf '     %-24s -> /mnt/%s\n' "$name" "${name// /}"
+        base="/mnt/${name// /}"
+        mp="$base"
+        n=2
+        while [[ -n "${taken[$mp]:-}" ]]; do
+            mp="$base-$n"
+            n=$((n + 1))
+        done
+        taken[$mp]=1
+        mounts+=("$mp")
+    done
+
+    printf '   Found on //%s:\n' "$host"
+    for i in "${!found[@]}"; do
+        printf '     %-24s -> %s\n' "${found[$i]}" "${mounts[$i]}"
     done
     printf '\n   Automount these folders when opened? [Y/n] '
     read -r reply </dev/tty || return 1
@@ -2485,8 +2456,8 @@ smb_ask() {
         [Nn]*) info "  left unmounted — edit $SMB_CONFIG and re-run to change this"; return 1 ;;
     esac
 
-    for name in "${found[@]}"; do
-        chosen+=("$name:/mnt/${name// /}")
+    for i in "${!found[@]}"; do
+        chosen+=("${found[$i]}:${mounts[$i]}")
     done
 
     mkdir -p "$(dirname "$SMB_CONFIG")"
@@ -3071,8 +3042,7 @@ configure_taskbar() {
     # missing .desktop shows up as a dead, blank tile.
     local present=() missing=() e
     for e in "${entries[@]}"; do
-        if [[ -f "/usr/share/applications/$e" || -f "$APPS_DIR/$e" \
-              || -f "/var/lib/flatpak/exports/share/applications/$e" ]]; then
+        if [[ -f "/usr/share/applications/$e" || -f "$APPS_DIR/$e" ]]; then
             present+=("$e")
         else
             missing+=("$e")
@@ -3211,7 +3181,8 @@ configure_taskbar() {
 #
 #   ~/.config/omarchy/shell.toml    shell text size          (hot-reloaded)
 #   ~/.config/omarchy/shell.json    bar layout and widgets   (hot-reloaded)
-#   ~/.config/omarchy/plugins/      the bar and tray clones, hyprmoncfg
+#   ~/.config/omarchy/plugins/      the bar and tray clones, hyprmoncfg, OmaProton VPN
+#   Dropbox                         Omarchy's own service (omarchy-install-service-dropbox)
 #   ~/.config/hypr/                 window rules, input, monitors
 #   ~/.config/foot/foot.ini         terminal font size
 #
@@ -3243,6 +3214,7 @@ configure_omarchy() {
     omarchy_background
     omarchy_plugins
     omarchy_bar_layout
+    omarchy_dropbox
     omarchy_hypr
     omarchy_terminal_font
     omarchy_terminal_alpha
@@ -3469,19 +3441,26 @@ omarchy_background() {
 # is for — and the clone is patched. The clone id is always
 # <username>.<plugin>, assigned by omarchy-plugin-clone itself.
 omarchy_plugins() {
-    local url found d
+    local url found d origin
 
     for url in "${OMARCHY_PLUGINS_GIT[@]}"; do
         found=""
         for d in "$HOME"/.config/omarchy/plugins/*/; do
             [[ -d "$d/.git" ]] || continue
-            [[ "$(git -C "$d" remote get-url origin 2>/dev/null)" == "$url" ]] && found="$d"
+            origin="$(git -C "$d" remote get-url origin 2>/dev/null)"
+            # A plugin installed by hand from its README may carry no .git
+            # suffix, or a trailing slash; either is the same repository.
+            origin="${origin%/}"; origin="${origin%.git}"
+            if [[ "$origin" == "${url%.git}" ]]; then
+                found="$d"
+                break
+            fi
         done
         if [[ -n "$found" ]]; then
             skip "$(basename "${found%/}") already installed"
             continue
         fi
-        if run omarchy plugin add "$url" --enable --yes; then
+        if run omarchy plugin add "$url" --yes; then
             ok "installed $(basename "$url" .git)"
             report "Omarchy plugins" "added $(basename "$url" .git)"
             OMARCHY_SHELL_DIRTY=1
@@ -3489,6 +3468,13 @@ omarchy_plugins() {
             warn "couldn't install the shell plugin from $url"
         fi
     done
+
+    # The OmaProton VPN widget drives the Proton CLI, and the Proton desktop app
+    # can't hold a connection at the same time. Removing it is left to you.
+    if have pacman && pacman -Q proton-vpn-gtk-app >/dev/null 2>&1; then
+        warn "proton-vpn-gtk-app is still installed and conflicts with the OmaProton VPN widget — remove it with: sudo pacman -Rns proton-vpn-gtk-app"
+        report "Omarchy plugins" "proton-vpn-gtk-app still installed (conflicts with OmaProton VPN)"
+    fi
 
     omarchy_clone_and_patch omarchy.bar  "$REPO_DIR/omarchy/patches/bar-islands.patch" \
         "/usr/share/omarchy/shell/plugins/bar/Bar.qml" "$OMARCHY_BAR_BASELINE_SHA" \
@@ -3532,6 +3518,48 @@ omarchy_patch_applied() {
     local dir="$1" patch_file="$2"
     [[ -d "$dir" && -r "$patch_file" ]] && have patch &&
         patch -p1 -R --dry-run -f -s -d "$dir" < "$patch_file" >/dev/null 2>&1
+}
+
+# Dropbox through Omarchy's own installer: its native packages from the Omarchy
+# repository plus a start, which is what the bar widget's panel talks to (it
+# drives dropbox-cli). Runs after the bar layout on purpose — the installer
+# enables omarchy.dropbox, and enabling a widget that isn't on the bar yet drops
+# it straight after the tray, ahead of everything the layout step orders.
+omarchy_dropbox() {
+    # Two Dropbox clients would sync the same folder against each other. The
+    # Flatpak is looked for on disk, not asked: even a read-only flatpak query
+    # scaffolds directories, and a dry run promises no changes.
+    if [[ -d "${FLATPAK_SYSTEM_DIR:-/var/lib/flatpak}/app/com.dropbox.Client" \
+          || -d "$HOME/.local/share/flatpak/app/com.dropbox.Client" ]]; then
+        warn "the Dropbox Flatpak is installed — remove it (flatpak uninstall com.dropbox.Client) and re-run to switch to Omarchy's Dropbox"
+        report "Dropbox" "skipped — the Flatpak version is still installed"
+        return 0
+    fi
+
+    if pacman -Q dropbox dropbox-cli >/dev/null 2>&1; then
+        skip "Dropbox already installed"
+        report "Dropbox" "already installed"
+        return 0
+    fi
+
+    have omarchy-install-service-dropbox || {
+        warn "omarchy-install-service-dropbox is missing — Dropbox not installed"
+        report "Dropbox" "FAILED (Omarchy's installer is missing)"
+        return 0
+    }
+
+    info "Installing Dropbox (Omarchy's service)..."
+    run omarchy-install-service-dropbox || true
+    [[ $DRY_RUN -eq 1 ]] && return 0
+    # The installer's exit status is its last echo's, so check what landed.
+    if pacman -Q dropbox dropbox-cli >/dev/null 2>&1; then
+        ok "Dropbox installed — sign in from its tray icon"
+        report "Dropbox" "installed — sign in from its tray icon"
+    else
+        warn "Dropbox didn't install — try again with: omarchy-install-service-dropbox"
+        report "Dropbox" "FAILED"
+    fi
+    return 0
 }
 
 omarchy_clone_and_patch() {
@@ -3675,9 +3703,14 @@ for section in layout.values():
             entry["id"] = tray_id or "omarchy.tray"
 
 # Extra widgets go directly after the tray, matching the real bar. Anything the
-# user has since dragged elsewhere is left where they put it.
+# user has since dragged elsewhere is left where they put it. A third-party
+# widget whose plugin didn't install is left out: an id with nothing behind it.
+plugins_dir = os.path.join(os.path.dirname(path), "plugins")
+def installed(w):
+    return w.startswith("omarchy.") or os.path.isdir(os.path.join(plugins_dir, w))
 have_ids = {e.get("id") for e in right}
-extras = [w for w in os.environ["EXTRA_RIGHT"].split(",") if w and w not in have_ids]
+extras = [w for w in os.environ["EXTRA_RIGHT"].split(",")
+          if w and w not in have_ids and installed(w)]
 if extras:
     tray_names = {tray_id, "omarchy.tray"} - {""}
     at = next((i for i, e in enumerate(right) if e.get("id") in tray_names), -1)
@@ -4113,7 +4146,6 @@ main() {
 
     preflight
     wanted packages     && install_packages
-    wanted flatpak      && install_flatpaks
     wanted agenttilecli && install_agenttilecli
     wanted streamhub    && install_streamhub
     wanted consolevault && install_consolevault

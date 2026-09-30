@@ -65,6 +65,13 @@ class NasConfigurationTests(unittest.TestCase):
         self.assertTrue(result.startswith(original))
         self.assertIn('/mnt/A[B]', result)
 
+    def test_mountpoint_spelling_does_not_duplicate_entries(self):
+        result = self.render('')
+        for spelling in ('/mnt/MoreStorage/', '//mnt//MoreStorage', '/mnt/./MoreStorage'):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(result, self.render(result, mountpoint=spelling))
+        self.assertIn('\t/mnt/MoreStorage\t', self.render('', mountpoint='/mnt/MoreStorage/'))
+
     def test_escaping_and_mountpoint_validation(self):
         result = self.render('', mountpoint='/mnt/More Storage')
         self.assertIn(r'/mnt/More\040Storage', result)

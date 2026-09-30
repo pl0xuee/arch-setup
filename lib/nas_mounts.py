@@ -21,6 +21,12 @@ def unescape_field(value):
     return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), value)
 
 
+def clean_path(path):
+    # /mnt/Media, /mnt/Media/ and //mnt//Media are one mount point. normpath
+    # alone keeps a leading '//', which POSIX leaves implementation-defined.
+    return '/' + os.path.normpath(path).lstrip('/') if path.startswith('/') else path
+
+
 def automount_options(options):
     # device-timeout applies to device units, not CIFS network sources.
     parts = [p for p in options.split(',') if p and p != 'x-gvfs-show'
@@ -32,6 +38,7 @@ def automount_options(options):
 
 
 def render_fstab(text, source, mountpoint, credentials, defaults):
+    mountpoint = clean_path(mountpoint)
     if not mountpoint.startswith('/') or mountpoint == '/':
         raise ValueError('NAS mount point must be an absolute path below /')
     if ',' in credentials or not credentials.startswith('/'):
@@ -42,7 +49,7 @@ def render_fstab(text, source, mountpoint, credentials, defaults):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         fields = list(re.finditer(r'\S+', line))
-        if len(fields) >= 2 and unescape_field(fields[1][0]) == mountpoint:
+        if len(fields) >= 2 and clean_path(unescape_field(fields[1][0])) == mountpoint:
             matches.append((i, fields))
     if len(matches) > 1:
         raise ValueError(f'multiple fstab entries for {mountpoint}; left unchanged')

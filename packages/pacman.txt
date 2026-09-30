@@ -7,23 +7,16 @@
 #   aur.txt             Brave Origin and Vesktop on Omarchy/plain Arch
 #   pacman-cachyos.txt   apps and gaming packages on native CachyOS only
 #   pacman-kde.txt       only worth installing on KDE Plasma
+#   pacman-omarchy.txt   only worth installing on Omarchy
 
 # ── Apps ──────────────────────────────────────────────────────────────
 keepassxc                    # Password manager
-proton-vpn-gtk-app           # ProtonVPN client
 gnome-disk-utility           # Disk management GUI
 lact                         # AMD GPU control (fan curves, undervolt)
 # freerdp is only an *optional* dep of remmina, so it has to be named
 # explicitly — install remmina alone and you get no RDP plugin at all.
 remmina                      # Remote desktop client
 freerdp                      # Remmina's RDP plugin
-
-# ── Package tooling ───────────────────────────────────────────────────
-# NOT on a stock CachyOS install — verified in a VM. The Flatpak step below
-# depends on this, so it has to be installed here first. (CachyOS ships
-# `shelly`, which can front for Flatpak, but it delegates to this same
-# binary — without it, shelly can't see Flathub either.)
-flatpak
 
 # ── Build toolchain (needed by AgentTileCLI + StreamHub) ──────────────
 git
