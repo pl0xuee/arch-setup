@@ -396,8 +396,9 @@ github_api_diagnose() {
 }
 
 # Authenticated GET, printing the body with the status appended on its own last
-# line. Callers that need to tell one failure from another — GridDown treats a
-# 404 as "no release cut yet" rather than an error — split that off themselves.
+# line. Callers split that off themselves, because they need to tell one failure
+# from another: GridDown treats a 404 as "no release cut yet" rather than an
+# error, and everything else turns the status into a diagnosis.
 github_api_raw() {
     local url="$1" token auth=()
     token="$(github_token)"
@@ -417,21 +418,6 @@ github_api_raw() {
 # Whether the request carried a token, so a diagnosis can tell "your 60 are
 # gone" from "your token's budget is gone" without re-deriving it.
 github_had_token() { [[ -n "$(github_token)" ]] && printf '1' || printf '0'; }
-
-# Fetch a GitHub API URL, printing the body on success. On failure the reason
-# goes to stderr and the caller decides whether that is fatal.
-github_api() {
-    local url="$1" response body code
-    response="$(github_api_raw "$url")"
-    code="${response##*$'\n'}"
-    body="${response%$'\n'*}"
-
-    [[ "$code" == 200 ]] && { printf '%s' "$body"; return 0; }
-
-    printf '   %s▲%s %s\n' "$YELLOW" "$RESET" \
-           "$(github_api_diagnose "$code" "$body" "$(github_had_token)")" >&2
-    return 1
-}
 
 BOX_W=52
 
@@ -1133,94 +1119,463 @@ ensure_codex_cli() {
     fi
 }
 
-# ── 3. StreamHub (prebuilt AppImage) ──────────────────────────────────────────
-# Fetched from GitHub Releases rather than built: the release AppImage bundles
-# castLabs Electron (Widevine), which is what makes Netflix/Prime actually play.
-# The app updates itself in place afterwards, so this normally runs once — but
-# it's version-stamped, so a re-run still picks up a newer release if there is one.
-install_streamhub() {
-    step "StreamHub"
+# ── 3-10. Prebuilt AppImages ──────────────────────────────────────────────────
+#
+# StreamHub, ConsoleVault, Disc Ripper, GridDown, Stalker GAMMA GUI, LoreRim,
+# WotLK Autoinstall and Music AI Player are all the same job: look up the latest
+# GitHub release, download one AppImage under a stable name into ~/.local/bin,
+# verify it BEFORE it is made executable, write a launcher, remember the version.
+# They differ only in data — which asset, how it is verified, what the launcher
+# says — so that data lives in appimage_load() and one installer does the rest.
+# The long per-app notes (why a key is hard-coded, what a digest does and doesn't
+# prove) sit beside the APP_* constants at the top of the file.
+#
+# To add an app: the constants block at the top, one case in appimage_load(), a
+# thin install_<key>() below, a line in main(), and a `wanted`/--only entry.
 
-    local stamp="$STREAMHUB_DIR/.version"
-    local release tag url
+# Fill the APP_* fields for one app. Everything is read from the per-app
+# constants at call time, so a test (or a caller) can point them somewhere else.
+#
+#   APP_STEP / APP_REPORT   heading, and the label in the closing summary
+#   APP_DIR / APP_IMAGE     data dir (icon, .version stamp) and the AppImage path
+#   APP_REPO                owner/name on GitHub
+#   APP_ASSET_RE            tail of the asset URL, as a grep regex. A trailing
+#                           quote is added, which is what keeps a sibling like
+#                           ...AppImage.sig or .zsync from matching
+#   APP_ASSET               exact asset name, for verifiers that look it up
+#   APP_VERIFY              minisign | sha512 | zsync | sha256 | sums
+#   APP_PUBKEY / APP_SUMS   minisign key / name of the checksum-file asset
+#   APP_UPDATES             parenthetical for "already installed"; may be empty
+#   APP_SKIP_NO_RELEASE     1 = a 404 means "no release cut yet": warn and move on
+#   APP_DESKTOP ...         the launcher; APP_WMCLASS must equal the window's
+#                           WM_CLASS or the taskbar shows a second, unmatched icon
+#   APP_POST                function run after a fresh install, if any
+appimage_load() {
+    APP_KEY="$1"
+    APP_ASSET="" APP_PUBKEY="" APP_SUMS="" APP_EXEC_ARGS="" APP_MIME="" APP_POST=""
+    APP_UPDATES="" APP_SKIP_NO_RELEASE=0
+    local self="it self-updates from here on"
+    local noupd="no self-updater — a re-run picks up new releases"
+
+    case "$1" in
+    streamhub)
+        # The unversioned filename is load-bearing: electron-updater only
+        # overwrites in place when the name carries no version.
+        APP_STEP="StreamHub"; APP_REPORT="StreamHub"
+        APP_DIR="$STREAMHUB_DIR"; APP_IMAGE="$STREAMHUB_APPIMAGE"; APP_REPO="$STREAMHUB_REPO"
+        APP_ASSET_RE='/StreamHub\.AppImage'; APP_VERIFY=sha512; APP_UPDATES="$self"
+        APP_DESKTOP="com.streamhub.app.desktop"; APP_WMCLASS="StreamHub"
+        APP_NAME="StreamHub"
+        APP_COMMENT="Netflix, Prime Video, Disney+, Max, Hulu and YouTube in one app"
+        APP_CATEGORIES="AudioVideo;Video;Player;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png"
+        ;;
+    consolevault)
+        APP_STEP="ConsoleVault"; APP_REPORT="ConsoleVault"
+        APP_DIR="$CONSOLEVAULT_DIR"; APP_IMAGE="$CONSOLEVAULT_APPIMAGE"; APP_REPO="$CONSOLEVAULT_REPO"
+        APP_ASSET_RE='_amd64\.AppImage'; APP_VERIFY=minisign; APP_PUBKEY="$CONSOLEVAULT_PUBKEY"
+        APP_UPDATES="$self"
+        APP_DESKTOP="com.consolevault.app.desktop"; APP_WMCLASS="ConsoleVault"
+        APP_NAME="ConsoleVault"
+        APP_COMMENT="Launcher for your own physical ROM collection (SNES, N64, PS1, PS2, PS3)"
+        APP_CATEGORIES="Game;Emulator;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png"
+        ;;
+    discripper)
+        APP_STEP="Disc Ripper"; APP_REPORT="Disc Ripper"
+        APP_DIR="$DISCRIPPER_DIR"; APP_IMAGE="$DISCRIPPER_APPIMAGE"; APP_REPO="$DISCRIPPER_REPO"
+        APP_ASSET_RE='/DiscRipper\.AppImage'; APP_VERIFY=zsync
+        APP_DESKTOP="com.discripper.app.desktop"; APP_WMCLASS="discripper"
+        APP_NAME="Disc Ripper"
+        APP_COMMENT="Auto-rip DVDs/Blu-rays to H.265 with Plex/Jellyfin naming"
+        APP_CATEGORIES="AudioVideo;Video;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png"
+        ;;
+    griddown)
+        # The newest of these and it may not have cut a first release yet. That is
+        # "not ready", not "broken": warn and let the remaining steps run.
+        #
+        # The WM_CLASS is the crate name, not productName: it was "tauri-app"
+        # through v0.1.3, and griddown renamed the crate after that, so this
+        # tracks the new name. Anything still on <=v0.1.3 keeps the duplicate
+        # icon until the app updates itself.
+        APP_STEP="GridDown"; APP_REPORT="GridDown"
+        APP_DIR="$GRIDDOWN_DIR"; APP_IMAGE="$GRIDDOWN_APPIMAGE"; APP_REPO="$GRIDDOWN_REPO"
+        APP_ASSET_RE='_amd64\.AppImage'; APP_VERIFY=minisign; APP_PUBKEY="$GRIDDOWN_PUBKEY"
+        APP_UPDATES="$self"; APP_SKIP_NO_RELEASE=1
+        APP_DESKTOP="com.griddown.app.desktop"; APP_WMCLASS="griddown"
+        APP_NAME="GridDown"
+        APP_COMMENT="Offline US maps — streets, forest service roads, trails and terrain"
+        APP_CATEGORIES="Utility;Maps;Education;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png"
+        ;;
+    gammagui)
+        # WM_CLASS comes from the .NET assembly name (Avalonia), matching the
+        # app's own AppDir .desktop.
+        APP_STEP="Stalker GAMMA GUI"; APP_REPORT="Stalker GAMMA GUI"
+        APP_DIR="$GAMMAGUI_DIR"; APP_IMAGE="$GAMMAGUI_APPIMAGE"; APP_REPO="$GAMMAGUI_REPO"
+        APP_ASSET="$GAMMAGUI_ASSET"; APP_ASSET_RE="/${GAMMAGUI_ASSET//./\\.}"; APP_VERIFY=sha256
+        APP_UPDATES="$noupd"
+        APP_DESKTOP="com.stalkergamma.gui.desktop"; APP_WMCLASS="StalkerGamma.Gui"
+        APP_NAME="Stalker GAMMA GUI"
+        APP_COMMENT="Download, install, update and play S.T.A.L.K.E.R. GAMMA (Steam/Proton)"
+        APP_CATEGORIES="Game;Utility;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png"
+        ;;
+    lorerim)
+        # The app registers as the handler for jackify: links (Nexus downloads),
+        # so the launcher carries the scheme and Exec takes the %u;
+        # refresh_desktop_db's update-desktop-database is what makes the scheme
+        # registration take effect.
+        APP_STEP="LoreRim Autoinstall"; APP_REPORT="LoreRim"
+        APP_DIR="$LORERIM_DIR"; APP_IMAGE="$LORERIM_APPIMAGE"; APP_REPO="$LORERIM_REPO"
+        APP_ASSET="$LORERIM_ASSET"; APP_ASSET_RE="/${LORERIM_ASSET//./\\.}"; APP_VERIFY=sha256
+        APP_UPDATES="$noupd"
+        APP_DESKTOP="com.lorerim.autoinstall.desktop"; APP_WMCLASS="Lorerim.Gui"
+        APP_NAME="LoreRim Autoinstall"
+        APP_COMMENT="One-click LoreRim (Wabbajack) installer for Linux"
+        APP_CATEGORIES="Game;Utility;"
+        APP_EXEC_ARGS="%u"; APP_MIME="x-scheme-handler/jackify;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png"
+        ;;
+    wotlk)
+        # No MimeType/%u: this app registers no URL scheme, and a %u on an Exec
+        # that ignores it is just noise.
+        APP_STEP="WotLK Autoinstall"; APP_REPORT="WotLK"
+        APP_DIR="$WOTLK_DIR"; APP_IMAGE="$WOTLK_APPIMAGE"; APP_REPO="$WOTLK_REPO"
+        APP_ASSET="$WOTLK_ASSET"; APP_ASSET_RE="/${WOTLK_ASSET//./\\.}"
+        APP_VERIFY=sums; APP_SUMS="$WOTLK_SUMS"
+        APP_UPDATES="$noupd"
+        APP_DESKTOP="com.wowwotlk.autoinstall.desktop"; APP_WMCLASS="WowWotlk.Gui"
+        APP_NAME="WotLK Autoinstall"
+        APP_COMMENT="One-click WoW 3.3.5a client installer for Linux"
+        APP_CATEGORIES="Game;Utility;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png"
+        ;;
+    musicai)
+        # Named music-ai-player.desktop, not com.<app>.app.desktop like the
+        # others: on Wayland the compositor matches a running window to a
+        # .desktop by its app-id, which Tauri takes from the crate name — so a
+        # com.musicaiplayer.app.desktop would leave the window a generic icon.
+        # The asset also ships a _amd64.deb; the `.AppImage` in the pattern keeps
+        # it off that, and the closing quote keeps it off the .sig.
+        APP_STEP="Music AI Player"; APP_REPORT="Music AI Player"
+        APP_DIR="$MUSICAI_DIR"; APP_IMAGE="$MUSICAI_APPIMAGE"; APP_REPO="$MUSICAI_REPO"
+        APP_ASSET_RE='_amd64\.AppImage'; APP_VERIFY=minisign; APP_PUBKEY="$MUSICAI_PUBKEY"
+        APP_UPDATES="$self"; APP_POST=musicai_post_install
+        APP_DESKTOP="music-ai-player.desktop"; APP_WMCLASS="music-ai-player"
+        APP_NAME="Music AI Player"
+        APP_COMMENT="Local music player — YouTube import, folder scan, ACE-Step generation"
+        APP_CATEGORIES="AudioVideo;Audio;Player;"
+        APP_ICON_URL="https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png"
+        ;;
+    *)  die "internal error: no AppImage spec for '$1'" ;;
+    esac
+}
+
+# The player needs nothing else, but its YouTube importer shells out to yt-dlp
+# and ffmpeg on PATH. Both are in packages/pacman.txt, so this only fires under
+# `--only musicai` on a box that skipped that step.
+musicai_post_install() {
+    if ! have yt-dlp || ! have ffmpeg; then
+        warn "yt-dlp and/or ffmpeg are missing — playback works, but the YouTube importer won't (run this without --only, or: sudo pacman -S --needed yt-dlp ffmpeg)"
+    fi
+}
+
+# Fields out of the release JSON. Each ends in `|| true`: grep exits 1 on no
+# match, pipefail hands that to the assignment, and set -e would kill the script
+# BEFORE the caller's `die` could say what was missing.
+release_tag() {
+    printf '%s' "$1" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true
+}
+
+# $2 is a regex for the end of the URL. The closing quote is part of the match,
+# so a name that merely starts the same (…AppImage.sig, …AppImage.zsync) can't
+# stand in for the AppImage.
+release_asset_url() {
+    local re="https://[^\"]*$2\""
+    printf '%s' "$1" | grep -o "$re" | head -1 | tr -d '"' || true
+}
+
+# The releases API reports a sha256 per asset in a `digest` field. Matched by
+# asset NAME with a real JSON parse, not a blind grep: a second asset added to
+# some future release must not be able to swap its digest in for ours.
+release_asset_digest() {
+    printf '%s' "$1" | ASSET="$2" python -c '
+import json, os, sys
+for a in json.load(sys.stdin).get("assets", []):
+    if a.get("name") == os.environ["ASSET"]:
+        d = a.get("digest") or ""
+        if d.startswith("sha256:"):
+            print(d[len("sha256:"):])
+        break
+' 2>/dev/null || true
+}
+
+# What the dry run says about verification, per scheme.
+appimage_verify_desc() {
+    case "$APP_VERIFY" in
+        minisign) printf 'verify minisign signature against the embedded public key' ;;
+        sha512)   printf "verify sha512 against the release's latest-linux.yml" ;;
+        zsync)    printf "verify sha1/length against the release's DiscRipper.AppImage.zsync" ;;
+        sha256)   printf "verify sha256 against the digest in the release's API record" ;;
+        sums)     printf "verify sha256 against the release's %s" "$APP_SUMS" ;;
+    esac
+}
+
+# Verify a download by whatever scheme this app's release offers. Every branch
+# fails closed: "couldn't check" is treated exactly like "failed".
+appimage_verify() {
+    local file="$1" tag="$2" url="$3" digest="$4" sums_url="$5"
+    case "$APP_VERIFY" in
+        minisign) verify_minisign "$file" "$url" "$APP_PUBKEY" ;;
+        sha512)   verify_streamhub "$file" "$tag" ;;
+        zsync)    verify_discripper "$file" "$tag" ;;
+        sha256)   verify_sha256_digest "$file" "$digest" ;;
+        sums)     verify_sha256sums "$file" "$sums_url" "$digest" "$APP_ASSET" "$APP_SUMS" ;;
+        *)        warn "no verifier for '$APP_VERIFY' — refusing the download"; return 1 ;;
+    esac
+}
+
+install_appimage() {
+    appimage_load "$1"
+    step "$APP_STEP"
+
+    local stamp="$APP_DIR/.version"
+    local release http tag url digest="" sums_url=""
 
     info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$STREAMHUB_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` is load-bearing. grep exits 1 when it matches nothing, pipefail
-    # propagates that to the assignment, and set -e then kills the script BEFORE
-    # the checks below can run — so a renamed or pulled asset would exit 1 with
-    # no diagnostic at all, instead of the clear message we wrote for exactly
-    # that case.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/StreamHub\.AppImage' | head -1 || true)"
+    # The raw helper appends the status on its own line, so "no release published
+    # yet" (404) can be told apart from a genuine failure.
+    release="$(github_api_raw "https://api.github.com/repos/$APP_REPO/releases/latest")"
+    http="${release##*$'\n'}"
+    release="${release%$'\n'*}"
 
+    if [[ "$http" == 404 && $APP_SKIP_NO_RELEASE -eq 1 ]]; then
+        warn "$APP_STEP has no published release yet — skipping (re-run this later to pick it up)"
+        report "$APP_REPORT" "skipped — no published release yet"
+        return 0
+    fi
+    [[ "$http" == 200 ]] || die "$(github_api_diagnose "$http" "$release" "$(github_had_token)")"
+
+    tag="$(release_tag "$release")"
+    url="$(release_asset_url "$release" "$APP_ASSET_RE")"
     [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no StreamHub.AppImage asset in release $tag."
+    [[ -n "$url" ]] || die "no $APP_STEP AppImage asset in release $tag."
 
-    if [[ -f "$STREAMHUB_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "StreamHub $tag already installed (it self-updates from here on)"
+    case "$APP_VERIFY" in
+        sha256|sums) digest="$(release_asset_digest "$release" "$APP_ASSET")" ;;
+    esac
+    if [[ "$APP_VERIFY" == sums ]]; then
+        # Anchored on /download/ so this can only match a release asset URL.
+        sums_url="$(release_asset_url "$release" "/download/[^\"]*/$APP_SUMS")"
+    fi
 
-        # Don't just return — repair the launcher if it's gone. Otherwise deleting
-        # the .desktop file (or having the icon fetch fail on an earlier run)
-        # leaves you permanently unable to get it back: the version stamp still
-        # matches, so every future run skips straight past this.
-        if [[ ! -f "$APPS_DIR/com.streamhub.app.desktop" || ! -f "$STREAMHUB_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$STREAMHUB_DIR" "https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png" write_streamhub_desktop
+    local note=""
+    [[ -z "$APP_UPDATES" ]] || note=" ($APP_UPDATES)"
+    if [[ -f "$APP_IMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
+        skip "$APP_STEP $tag already installed$note"
+
+        # Don't just return — repair the launcher if it's gone or stale. A
+        # matching version stamp would otherwise skip this step forever and strand
+        # a deleted .desktop or icon; a launcher from an older version of this
+        # script can also carry a stale StartupWMClass, which splits the taskbar
+        # icon.
+        if [[ ! -f "$APPS_DIR/$APP_DESKTOP" || ! -f "$APP_DIR/icon.png" ]] \
+            || ! grep -qxF "StartupWMClass=$APP_WMCLASS" "$APPS_DIR/$APP_DESKTOP"; then
+            info "Launcher missing or out of date — recreating it..."
+            repair_app_launcher "$APP_KEY"
         fi
 
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.streamhub.app.desktop"
+        # Outside the repair branch on purpose: that only fires when ours is
+        # missing or stale, and a stray can sit beside a perfectly good one.
+        prune_competing_launchers "$APP_DESKTOP"
 
-        report "StreamHub" "$tag already installed"
+        report "$APP_REPORT" "$tag already installed"
         return
     fi
 
-    run mkdir -p "$BIN_DIR" "$STREAMHUB_DIR" "$APPS_DIR"
+    run mkdir -p "$BIN_DIR" "$APP_DIR" "$APPS_DIR"
 
-    info "Downloading StreamHub $tag..."
-    # Download to a temp file beside the target, then move into place, so an
-    # interrupted download can't leave a half-written AppImage that still looks
-    # runnable — and so a failed update can't destroy a working install.
-    local tmp="$STREAMHUB_APPIMAGE.partial"
+    info "Downloading $APP_STEP $tag..."
+    # Temp file beside the target, moved into place only after it verifies, so an
+    # interrupted or unverifiable download never replaces a working AppImage.
+    local tmp="$APP_IMAGE.partial"
     if [[ $DRY_RUN -eq 1 ]]; then
         run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha512 against the release's latest-linux.yml"
+        run "$(appimage_verify_desc)"
         run chmod +x "$tmp"
-        run mv -f "$tmp" "$STREAMHUB_APPIMAGE"
-        run curl -fsSL -o "$STREAMHUB_DIR/icon.png" "https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png"
-        run "write $APPS_DIR/com.streamhub.app.desktop"
-        prune_competing_launchers "com.streamhub.app.desktop"
+        run mv -f "$tmp" "$APP_IMAGE"
+        run curl -fsSL -o "$APP_DIR/icon.png" "$APP_ICON_URL"
+        run "write $APPS_DIR/$APP_DESKTOP"
+        prune_competing_launchers "$APP_DESKTOP"
         run "stamp version $tag"
     else
         curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
 
-        # Verify before making it executable.
-        #
-        # This is a 130MB binary fetched off the internet and then run with your
-        # user's full privileges. electron-builder publishes a sha512 for it in
-        # latest-linux.yml alongside the release, so there is no good reason to
-        # take the download on trust. A mismatch means a corrupt download or a
-        # tampered asset; either way we stop rather than chmod +x it.
-        verify_streamhub "$tmp" "$tag" || { rm -f "$tmp"; die "StreamHub download could not be verified — refusing to install it."; }
+        # Verify before making it executable: this is a binary off the internet
+        # about to run with your user's privileges. A failure means a corrupt or
+        # tampered asset — stop, don't chmod it. (Which checks are signatures and
+        # which only catch a bad transfer is spelled out beside each app's
+        # constants.)
+        appimage_verify "$tmp" "$tag" "$url" "$digest" "$sums_url" \
+            || { rm -f "$tmp"; die "$APP_STEP download could not be verified — refusing to install it."; }
 
         chmod +x "$tmp"
-        mv -f "$tmp" "$STREAMHUB_APPIMAGE"
+        mv -f "$tmp" "$APP_IMAGE"
 
-        curl -fsSL -o "$STREAMHUB_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$STREAMHUB_REPO/master/assets/icon.png" \
+        curl -fsSL -o "$APP_DIR/icon.png" "$APP_ICON_URL" \
             || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
 
-        write_streamhub_desktop
-        prune_competing_launchers "com.streamhub.app.desktop"
+        write_app_desktop "$APP_KEY"
+        prune_competing_launchers "$APP_DESKTOP"
         printf '%s\n' "$tag" > "$stamp"
         refresh_desktop_db
+
+        if [[ -n "$APP_POST" ]]; then "$APP_POST"; fi
     fi
 
-    ok "StreamHub $tag installed to $STREAMHUB_APPIMAGE"
-    report "StreamHub" "$tag (prebuilt AppImage) → $STREAMHUB_APPIMAGE"
+    ok "$APP_STEP $tag installed to $APP_IMAGE"
+    report "$APP_REPORT" "$tag (prebuilt AppImage) → $APP_IMAGE"
+}
+
+install_streamhub()    { install_appimage streamhub; }
+install_consolevault() { install_appimage consolevault; }
+install_discripper()   { install_appimage discripper; }
+install_griddown()     { install_appimage griddown; }
+install_gammagui()     { install_appimage gammagui; }
+install_lorerim()      { install_appimage lorerim; }
+install_wotlk()        { install_appimage wotlk; }
+install_musicai()      { install_appimage musicai; }
+
+# The launcher. The icon is referenced by absolute path rather than a themed
+# name, which sidesteps guessing which hicolor size directory the PNG belongs in.
+write_app_desktop() {
+    appimage_load "$1"
+    {
+        printf '[Desktop Entry]\n'
+        printf 'Type=Application\n'
+        printf 'Name=%s\n' "$APP_NAME"
+        printf 'Comment=%s\n' "$APP_COMMENT"
+        printf 'Exec=%s%s\n' "$APP_IMAGE" "${APP_EXEC_ARGS:+ $APP_EXEC_ARGS}"
+        printf 'Icon=%s\n' "$APP_DIR/icon.png"
+        printf 'Terminal=false\n'
+        printf 'Categories=%s\n' "$APP_CATEGORIES"
+        printf 'StartupNotify=true\n'
+        printf 'StartupWMClass=%s\n' "$APP_WMCLASS"
+        [[ -z "$APP_MIME" ]] || printf 'MimeType=%s\n' "$APP_MIME"
+    } > "$APPS_DIR/$APP_DESKTOP"
+}
+
+# Repair an installed app's launcher without bypassing --dry-run.
+repair_app_launcher() {
+    appimage_load "$1"
+    run mkdir -p "$APPS_DIR" "$APP_DIR"
+    if [[ ! -f "$APP_DIR/icon.png" ]]; then
+        run curl -fsSL -o "$APP_DIR/icon.png" "$APP_ICON_URL" || warn "couldn't fetch the icon"
+    fi
+    run write_app_desktop "$1"
+    run refresh_desktop_db
+    if [[ $DRY_RUN -eq 1 ]]; then
+        info "Launcher would be recreated."
+    else
+        ok "launcher recreated"
+    fi
+}
+
+# KDE keeps its own application-menu index; without kbuildsycoca a new .desktop
+# file may not appear in the menu or KRunner until the next login.
+refresh_desktop_db() {
+    have update-desktop-database && update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+    have kbuildsycoca6           && kbuildsycoca6 >/dev/null 2>&1 || true
+    return 0
+}
+
+# KDE binds a window to a launcher by StartupWMClass. A .desktop left behind by
+# a manual install of the same app claims the class we write, and the taskbar
+# takes whichever it finds first — when that's the stray, the pinned icon never
+# lights up and the app opens a second entry beside it. Ours is the one the
+# panel is pinned to and the one that tracks the AppImage this script manages,
+# so any other launcher claiming the class goes.
+prune_competing_launchers() {
+    local keep="$1" f removed=0 wmclass
+    [[ -d "$APPS_DIR" ]] || return 0
+
+    # Read the class off the launcher being kept rather than repeating the
+    # literal at every call site. 63b72a5 is the standing reminder that
+    # these drift: GridDown's went from GridDown to griddown, and a call site
+    # left on the old value would delete the very launcher it means to protect.
+    # No launcher, or one carrying no class, means nothing to compare against —
+    # prune nothing rather than let an empty class match loosely.
+    #
+    # The -f test has to come first, not just be implied by an empty $wmclass:
+    # sed exits 2 on a missing file, pipefail hands that to the assignment, and
+    # set -e kills the whole run before the -n check below is ever reached. That
+    # is exactly the dry-run path — nothing writes the launcher, so it is always
+    # missing — on any box where $APPS_DIR itself exists, which is every box that
+    # has run this script once. Every app here calls this, so it took until one
+    # of them was new on an already-set-up machine for it to show.
+    [[ -f "$APPS_DIR/$keep" ]] || return 0
+    wmclass="$(sed -n 's/^StartupWMClass=//p' "$APPS_DIR/$keep" 2>/dev/null | head -1)"
+    [[ -n "$wmclass" ]] || return 0
+
+    for f in "$APPS_DIR"/*.desktop; do
+        [[ -f "$f" ]] || continue                       # no match — the glob stayed literal
+        [[ "${f##*/}" == "$keep" ]] && continue
+        # -F: every class here contains a dot, and an unescaped dot in a regex
+        # matches any character — enough to delete a different app's launcher.
+        grep -qxF "StartupWMClass=$wmclass" "$f" || continue
+        if [[ $DRY_RUN -eq 1 ]]; then
+            run "rm $f (claims StartupWMClass=$wmclass — splits the taskbar icon with $keep)"
+        elif rm -f "$f"; then
+            removed=1
+            warn "removed ${f##*/} — it claimed the same window class as $keep, which split the taskbar icon"
+        else
+            warn "couldn't remove ${f##*/} — it claims the same window class as $keep, so the taskbar icon may still split"
+        fi
+    done
+    [[ $removed -eq 1 ]] && refresh_desktop_db
+    return 0
+}
+
+# ── verifiers ─────────────────────────────────────────────────────────────────
+# Each returns non-zero if the check fails OR can't be made — "couldn't verify"
+# is not the same as "verified", and is not a good enough reason to run the
+# binary anyway.
+
+# Tauri apps (ConsoleVault, GridDown, Music AI Player): the release publishes a
+# minisign signature next to the AppImage (…AppImage.sig), checked against the
+# public key baked into this script — never one fetched from the release it is
+# meant to vouch for.
+verify_minisign() {
+    local file="$1" url="$2" pubkey="$3"
+
+    # minisign is in packages/pacman.txt, but `--only <app>` can reach here
+    # without the packages step, so pull it in rather than failing.
+    if ! have minisign; then
+        info "Installing minisign (needed to verify the download)..."
+        run sudo pacman -S --needed --noconfirm minisign \
+            || { warn "couldn't install minisign — cannot verify the download"; return 1; }
+    fi
+
+    # Tauri publishes the .sig as base64 of the actual minisign signature file, so
+    # it has to be decoded before minisign will read it.
+    local sig="$file.minisig"
+    curl -fsSL "$url.sig" 2>/dev/null | base64 -d > "$sig" 2>/dev/null \
+        || { warn "couldn't fetch/decode the .sig — cannot verify the download"; rm -f "$sig"; return 1; }
+    [[ -s "$sig" ]] || { warn "empty signature — cannot verify the download"; rm -f "$sig"; return 1; }
+
+    # -P takes the public key string directly, so there's no temp keyfile to
+    # clean up. minisign auto-detects the prehashed (Tauri) signature format.
+    if minisign -Vm "$file" -x "$sig" -P "$pubkey" >/dev/null 2>&1; then
+        rm -f "$sig"
+        ok "signature verified (minisign)"
+        return 0
+    fi
+
+    rm -f "$sig"
+    warn "SIGNATURE MISMATCH — the download does not match the published minisign signature"
+    return 1
 }
 
 # Check the downloaded AppImage against the sha512 the release publishes in
@@ -1260,317 +1615,6 @@ PY
     return 1
 }
 
-# Icon is referenced by absolute path rather than a themed name, which sidesteps
-# having to guess which hicolor size directory the source PNG belongs in.
-write_streamhub_desktop() {
-    cat > "$APPS_DIR/com.streamhub.app.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=StreamHub
-Comment=Netflix, Prime Video, Disney+, Max, Hulu and YouTube in one app
-Exec=$STREAMHUB_APPIMAGE
-Icon=$STREAMHUB_DIR/icon.png
-Terminal=false
-Categories=AudioVideo;Video;Player;
-StartupNotify=true
-StartupWMClass=StreamHub
-EOF
-}
-
-# Repair an installed app's launcher without bypassing --dry-run.
-repair_app_launcher() {
-    local app_dir="$1" icon_url="$2" writer="$3"
-    run mkdir -p "$APPS_DIR" "$app_dir"
-    if [[ ! -f "$app_dir/icon.png" ]]; then
-        run curl -fsSL -o "$app_dir/icon.png" "$icon_url" || warn "couldn't fetch the icon"
-    fi
-    run "$writer"
-    run refresh_desktop_db
-    if [[ $DRY_RUN -eq 1 ]]; then
-        info "Launcher would be recreated."
-    else
-        ok "launcher recreated"
-    fi
-}
-
-# KDE keeps its own application-menu index; without kbuildsycoca a new .desktop
-# file may not appear in the menu or KRunner until the next login.
-refresh_desktop_db() {
-    have update-desktop-database && update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
-    have kbuildsycoca6           && kbuildsycoca6 >/dev/null 2>&1 || true
-    return 0
-}
-
-# KDE binds a window to a launcher by StartupWMClass. A .desktop left behind by
-# a manual install of the same app claims the class we write, and the taskbar
-# takes whichever it finds first — when that's the stray, the pinned icon never
-# lights up and the app opens a second entry beside it. Ours is the one the
-# panel is pinned to and the one that tracks the AppImage this script manages,
-# so any other launcher claiming the class goes.
-prune_competing_launchers() {
-    local keep="$1" f removed=0 wmclass
-    [[ -d "$APPS_DIR" ]] || return 0
-
-    # Read the class off the launcher being kept rather than repeating the
-    # literal at all seven call sites. 63b72a5 is the standing reminder that
-    # these drift: GridDown's went from GridDown to griddown, and a call site
-    # left on the old value would delete the very launcher it means to protect.
-    # No launcher, or one carrying no class, means nothing to compare against —
-    # prune nothing rather than let an empty class match loosely.
-    #
-    # The -f test has to come first, not just be implied by an empty $wmclass:
-    # sed exits 2 on a missing file, pipefail hands that to the assignment, and
-    # set -e kills the whole run before the -n check below is ever reached. That
-    # is exactly the dry-run path — nothing writes the launcher, so it is always
-    # missing — on any box where $APPS_DIR itself exists, which is every box that
-    # has run this script once. Every app here calls this, so it took until one
-    # of them was new on an already-set-up machine for it to show.
-    [[ -f "$APPS_DIR/$keep" ]] || return 0
-    wmclass="$(sed -n 's/^StartupWMClass=//p' "$APPS_DIR/$keep" 2>/dev/null | head -1)"
-    [[ -n "$wmclass" ]] || return 0
-
-    for f in "$APPS_DIR"/*.desktop; do
-        [[ -f "$f" ]] || continue                       # no match — the glob stayed literal
-        [[ "${f##*/}" == "$keep" ]] && continue
-        # -F: every class here contains a dot, and an unescaped dot in a regex
-        # matches any character — enough to delete a different app's launcher.
-        grep -qxF "StartupWMClass=$wmclass" "$f" || continue
-        if [[ $DRY_RUN -eq 1 ]]; then
-            run "rm $f (claims StartupWMClass=$wmclass — splits the taskbar icon with $keep)"
-        elif rm -f "$f"; then
-            removed=1
-            warn "removed ${f##*/} — it claimed the same window class as $keep, which split the taskbar icon"
-        else
-            warn "couldn't remove ${f##*/} — it claims the same window class as $keep, so the taskbar icon may still split"
-        fi
-    done
-    [[ $removed -eq 1 ]] && refresh_desktop_db
-    return 0
-}
-
-# ── 4. ConsoleVault (prebuilt AppImage) ───────────────────────────────────────
-# A Tauri launcher for a physical ROM collection (SNES/N64/PS1/PS2/PS3). Like
-# StreamHub it's a self-updating AppImage fetched from GitHub Releases, so this
-# normally runs once but is version-stamped to pick up a newer release on re-run.
-install_consolevault() {
-    step "ConsoleVault"
-
-    local stamp="$CONSOLEVAULT_DIR/.version"
-    local release tag url
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$CONSOLEVAULT_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before we can print the clear message below — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The trailing `"` in the pattern is what keeps this from also matching the
-    # sibling `..._amd64.AppImage.sig` asset URL.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no ConsoleVault _amd64.AppImage asset in release $tag."
-
-    if [[ -f "$CONSOLEVAULT_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "ConsoleVault $tag already installed (it self-updates from here on)"
-
-        # Same launcher-repair logic as StreamHub: a matching version stamp would
-        # otherwise skip this step forever, stranding a deleted .desktop/icon.
-        if [[ ! -f "$APPS_DIR/com.consolevault.app.desktop" || ! -f "$CONSOLEVAULT_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$CONSOLEVAULT_DIR" "https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png" write_consolevault_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.consolevault.app.desktop"
-
-        report "ConsoleVault" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$CONSOLEVAULT_DIR" "$APPS_DIR"
-
-    info "Downloading ConsoleVault $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download or a failed update never leaves a half-written or
-    # unverified AppImage where a runnable one used to be.
-    local tmp="$CONSOLEVAULT_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify minisign signature against the embedded public key"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$CONSOLEVAULT_APPIMAGE"
-        run curl -fsSL -o "$CONSOLEVAULT_DIR/icon.png" "https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png"
-        run "write $APPS_DIR/com.consolevault.app.desktop"
-        prune_competing_launchers "com.consolevault.app.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable. This is an 80MB binary pulled off
-        # the internet and then run with your user's full privileges. Tauri signs
-        # every release with minisign and embeds the matching public key in the
-        # app source, so there's no reason to trust the download blind. A bad
-        # signature means a corrupt or tampered asset — we stop, we don't chmod it.
-        verify_consolevault "$tmp" "$url" || { rm -f "$tmp"; die "ConsoleVault download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$CONSOLEVAULT_APPIMAGE"
-
-        curl -fsSL -o "$CONSOLEVAULT_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$CONSOLEVAULT_REPO/main/src-tauri/icons/icon.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_consolevault_desktop
-        prune_competing_launchers "com.consolevault.app.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "ConsoleVault $tag installed to $CONSOLEVAULT_APPIMAGE"
-    report "ConsoleVault" "$tag (prebuilt AppImage) → $CONSOLEVAULT_APPIMAGE"
-}
-
-# Verify the AppImage against the minisign signature the release publishes next to
-# it (…AppImage.sig), using the public key baked into this script. Returns
-# non-zero if the signature is missing, malformed, or doesn't match — "couldn't
-# check" is treated exactly like "failed", never like "passed".
-verify_consolevault() {
-    local file="$1" url="$2"
-
-    # minisign isn't in the CachyOS base install. It's listed in packages/pacman.txt
-    # so a normal run already has it, but `--only consolevault` can reach here
-    # without the packages step, so pull it in on the fly rather than failing.
-    if ! have minisign; then
-        info "Installing minisign (needed to verify the download)..."
-        run sudo pacman -S --needed --noconfirm minisign \
-            || { warn "couldn't install minisign — cannot verify the download"; return 1; }
-    fi
-
-    # Tauri publishes the .sig as base64 of the actual minisign signature file, so
-    # it has to be decoded before minisign will read it.
-    local sig="$file.minisig"
-    curl -fsSL "$url.sig" 2>/dev/null | base64 -d > "$sig" 2>/dev/null \
-        || { warn "couldn't fetch/decode the .sig — cannot verify the download"; rm -f "$sig"; return 1; }
-    [[ -s "$sig" ]] || { warn "empty signature — cannot verify the download"; rm -f "$sig"; return 1; }
-
-    # -P takes the public key string directly, so there's no temp keyfile to clean
-    # up. minisign auto-detects the prehashed (Tauri) signature format.
-    if minisign -Vm "$file" -x "$sig" -P "$CONSOLEVAULT_PUBKEY" >/dev/null 2>&1; then
-        rm -f "$sig"
-        ok "signature verified (minisign)"
-        return 0
-    fi
-
-    rm -f "$sig"
-    warn "SIGNATURE MISMATCH — the download does not match the published minisign signature"
-    return 1
-}
-
-write_consolevault_desktop() {
-    cat > "$APPS_DIR/com.consolevault.app.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=ConsoleVault
-Comment=Launcher for your own physical ROM collection (SNES, N64, PS1, PS2, PS3)
-Exec=$CONSOLEVAULT_APPIMAGE
-Icon=$CONSOLEVAULT_DIR/icon.png
-Terminal=false
-Categories=Game;Emulator;
-StartupNotify=true
-StartupWMClass=ConsoleVault
-EOF
-}
-
-# ── 5. Disc Ripper (prebuilt AppImage) ────────────────────────────────────────
-# A PySide6/Qt app that auto-detects a disc, rips it to H.265 and names the output
-# for Plex/Jellyfin. Same shape as StreamHub/ConsoleVault — a GitHub-Releases
-# AppImage under a stable name — but its release ships no signature or checksum, so
-# it's verified against the SHA-1/length in the sibling .zsync (integrity, not a
-# signature; see the note by DISCRIPPER_* above). Version-stamped so a re-run picks
-# up a newer release.
-install_discripper() {
-    step "Disc Ripper"
-
-    local stamp="$DISCRIPPER_DIR/.version"
-    local release tag url
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$DISCRIPPER_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The trailing `"` keeps this from also matching the sibling ...AppImage.zsync
-    # asset URL, whose value continues past `.AppImage` before its closing quote.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/DiscRipper\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no DiscRipper.AppImage asset in release $tag."
-
-    if [[ -f "$DISCRIPPER_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "Disc Ripper $tag already installed"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/com.discripper.app.desktop" || ! -f "$DISCRIPPER_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$DISCRIPPER_DIR" "https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png" write_discripper_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.discripper.app.desktop"
-
-        report "Disc Ripper" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$DISCRIPPER_DIR" "$APPS_DIR"
-
-    info "Downloading Disc Ripper $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download never leaves a half-written AppImage where a runnable
-    # one used to be.
-    local tmp="$DISCRIPPER_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha1/length against the release's DiscRipper.AppImage.zsync"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$DISCRIPPER_APPIMAGE"
-        run curl -fsSL -o "$DISCRIPPER_DIR/icon.png" "https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png"
-        run "write $APPS_DIR/com.discripper.app.desktop"
-        prune_competing_launchers "com.discripper.app.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable. This is an 80MB binary pulled off the
-        # internet and then run with your user's full privileges. The release has no
-        # signature to check, but the .zsync header records the full file's SHA-1
-        # and length; a mismatch means a corrupt or truncated download and we stop
-        # rather than chmod it. (This does not defend against a swapped release —
-        # the .zsync comes from the same one — only against a broken transfer.)
-        verify_discripper "$tmp" "$tag" || { rm -f "$tmp"; die "Disc Ripper download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$DISCRIPPER_APPIMAGE"
-
-        curl -fsSL -o "$DISCRIPPER_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$DISCRIPPER_REPO/main/src/discripper/resources/icon.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_discripper_desktop
-        prune_competing_launchers "com.discripper.app.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "Disc Ripper $tag installed to $DISCRIPPER_APPIMAGE"
-    report "Disc Ripper" "$tag (prebuilt AppImage) → $DISCRIPPER_APPIMAGE"
-}
-
 # Verify the AppImage against the SHA-1 and length recorded in its sibling .zsync
 # header (the release ships no .sig or checksum file). Returns non-zero if the
 # .zsync can't be fetched or the digest doesn't match — "couldn't check" is treated
@@ -1606,283 +1650,9 @@ verify_discripper() {
     return 1
 }
 
-write_discripper_desktop() {
-    cat > "$APPS_DIR/com.discripper.app.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Disc Ripper
-Comment=Auto-rip DVDs/Blu-rays to H.265 with Plex/Jellyfin naming
-Exec=$DISCRIPPER_APPIMAGE
-Icon=$DISCRIPPER_DIR/icon.png
-Terminal=false
-Categories=AudioVideo;Video;
-StartupNotify=true
-StartupWMClass=discripper
-EOF
-}
-
-# ── 6. GridDown (prebuilt AppImage) ───────────────────────────────────────────
-# Offline US maps — streets, forest service roads, trails and terrain that work with
-# no internet. Same shape as ConsoleVault (Tauri, updater on, minisign-signed
-# release), so the download is checked against the embedded public key before it's
-# made executable. Version-stamped so a re-run picks up a newer release.
-install_griddown() {
-    step "GridDown"
-
-    local stamp="$GRIDDOWN_DIR/.version"
-    local release tag url http
-
-    info "Checking latest release..."
-    # The raw helper appends the status on its own line so "no releases published
-    # yet" (404) can be told apart from a genuine failure. Without that split, -f
-    # collapses both into one exit code and the step below can't react.
-    release="$(github_api_raw "https://api.github.com/repos/$GRIDDOWN_REPO/releases/latest")"
-    http="${release##*$'\n'}"
-    release="${release%$'\n'*}"
-
-    # GridDown is the newest of these apps and may not have cut its first release
-    # yet. That's a "not ready", not a "something is broken" — warn and move on so
-    # the remaining steps (including system config) still run. Every other failure
-    # below, including a release whose asset is missing or unverifiable, still dies.
-    if [[ "$http" == "404" ]]; then
-        warn "GridDown has no published release yet — skipping (re-run this later to pick it up)"
-        report "GridDown" "skipped — no published release yet"
-        return 0
-    fi
-    [[ "$http" == "200" ]] || die "$(github_api_diagnose "$http" "$release" "$(github_had_token)")"
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The trailing `"` is what keeps this from also matching the sibling
-    # ..._amd64.AppImage.sig asset URL.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no GridDown _amd64.AppImage asset in release $tag."
-
-    if [[ -f "$GRIDDOWN_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "GridDown $tag already installed (it self-updates from here on)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        # ...and a launcher written by an older version of this script can carry a
-        # stale StartupWMClass, which leaves a duplicate taskbar icon, so rewrite
-        # it whenever it doesn't match what write_griddown_desktop produces now.
-        if [[ ! -f "$APPS_DIR/com.griddown.app.desktop" || ! -f "$GRIDDOWN_DIR/icon.png" ]] \
-            || ! grep -qx 'StartupWMClass=griddown' "$APPS_DIR/com.griddown.app.desktop"; then
-            info "Launcher missing or out of date — recreating it..."
-            repair_app_launcher "$GRIDDOWN_DIR" "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png" write_griddown_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.griddown.app.desktop"
-
-        report "GridDown" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$GRIDDOWN_DIR" "$APPS_DIR"
-
-    info "Downloading GridDown $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted or unverifiable download never replaces a working AppImage.
-    local tmp="$GRIDDOWN_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify minisign signature against the embedded public key"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$GRIDDOWN_APPIMAGE"
-        run curl -fsSL -o "$GRIDDOWN_DIR/icon.png" "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png"
-        run "write $APPS_DIR/com.griddown.app.desktop"
-        prune_competing_launchers "com.griddown.app.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as ConsoleVault: this is
-        # a binary off the internet about to run with your user's privileges, and
-        # Tauri signs every release, so there's no reason to trust it blind.
-        verify_griddown "$tmp" "$url" || { rm -f "$tmp"; die "GridDown download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$GRIDDOWN_APPIMAGE"
-
-        curl -fsSL -o "$GRIDDOWN_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/icons/icon.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_griddown_desktop
-        prune_competing_launchers "com.griddown.app.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "GridDown $tag installed to $GRIDDOWN_APPIMAGE"
-    report "GridDown" "$tag (prebuilt AppImage) → $GRIDDOWN_APPIMAGE"
-}
-
-# Verify the AppImage against the minisign signature published beside it
-# (…AppImage.sig), using the key baked into this script. Returns non-zero if the
-# signature is missing, malformed or doesn't match — "couldn't check" is treated
-# exactly like "failed", never like "passed".
-verify_griddown() {
-    local file="$1" url="$2"
-
-    # minisign is in packages/pacman.txt (for ConsoleVault), but `--only griddown`
-    # can reach here without the packages step, so pull it in rather than failing.
-    if ! have minisign; then
-        info "Installing minisign (needed to verify the download)..."
-        run sudo pacman -S --needed --noconfirm minisign \
-            || { warn "couldn't install minisign — cannot verify the download"; return 1; }
-    fi
-
-    # Tauri publishes the .sig as base64 of the actual minisign signature file, so
-    # it has to be decoded before minisign will read it.
-    local sig="$file.minisig"
-    curl -fsSL "$url.sig" 2>/dev/null | base64 -d > "$sig" 2>/dev/null \
-        || { warn "couldn't fetch/decode the .sig — cannot verify the download"; rm -f "$sig"; return 1; }
-    [[ -s "$sig" ]] || { warn "empty signature — cannot verify the download"; rm -f "$sig"; return 1; }
-
-    if minisign -Vm "$file" -x "$sig" -P "$GRIDDOWN_PUBKEY" >/dev/null 2>&1; then
-        rm -f "$sig"
-        ok "signature verified (minisign)"
-        return 0
-    fi
-
-    rm -f "$sig"
-    warn "SIGNATURE MISMATCH — the download does not match the published minisign signature"
-    return 1
-}
-
-# StartupWMClass has to match the window's WM_CLASS or the taskbar shows the
-# running window as a second, unmatched app next to this icon. Tauri takes that
-# from the crate name, not productName, so it was "tauri-app" through v0.1.3;
-# griddown renamed the crate after that release, and the app self-updates, so
-# this tracks the new name. Anything still on <=v0.1.3 keeps the duplicate icon
-# until it updates.
-write_griddown_desktop() {
-    cat > "$APPS_DIR/com.griddown.app.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=GridDown
-Comment=Offline US maps — streets, forest service roads, trails and terrain
-Exec=$GRIDDOWN_APPIMAGE
-Icon=$GRIDDOWN_DIR/icon.png
-Terminal=false
-Categories=Utility;Maps;Education;
-StartupNotify=true
-StartupWMClass=griddown
-EOF
-}
-
-# ── 7. Stalker GAMMA GUI (prebuilt AppImage) ──────────────────────────────────
-# An Avalonia/.NET GUI that downloads, installs, updates and launches
-# S.T.A.L.K.E.R. GAMMA via Steam/Proton. Same GitHub-Releases-AppImage shape as
-# the others but with no in-app updater: the version stamp is what picks up a
-# newer release, on re-run, rather than being a once-only convenience. The
-# release ships no signature or checksum asset, so the download is verified
-# against the sha256 digest the releases API reports for the asset (integrity,
-# not a signature — see the note by GAMMAGUI_* above).
-install_gammagui() {
-    step "Stalker GAMMA GUI"
-
-    local stamp="$GAMMAGUI_DIR/.version"
-    local release tag url digest
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$GAMMAGUI_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The asset name is already stable/unversioned. The trailing `"` keeps the
-    # match off any sibling asset URL that continues past `.AppImage`.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/StalkerGammaGui-x86_64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no $GAMMAGUI_ASSET asset in release $tag."
-
-    # The releases API reports each asset's sha256 in a `digest` field — the only
-    # checksum this release publishes anywhere. Matched to the asset by NAME via
-    # a real JSON parse, not a blind grep: a second asset added to some future
-    # release must not be able to swap its digest in for the AppImage's.
-    digest="$(printf '%s' "$release" | GAMMAGUI_ASSET="$GAMMAGUI_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["GAMMAGUI_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null || true)"
-
-    if [[ -f "$GAMMAGUI_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "Stalker GAMMA GUI $tag already installed (no self-updater — a re-run picks up new releases)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/com.stalkergamma.gui.desktop" || ! -f "$GAMMAGUI_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$GAMMAGUI_DIR" "https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png" write_gammagui_desktop
-        fi
-
-        # Outside that branch on purpose: a stray launcher can sit beside a
-        # perfectly good one of ours, and the repair above only fires when ours
-        # is missing or stale.
-        prune_competing_launchers "com.stalkergamma.gui.desktop"
-
-        report "Stalker GAMMA GUI" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$GAMMAGUI_DIR" "$APPS_DIR"
-
-    info "Downloading Stalker GAMMA GUI $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download never leaves a half-written AppImage where a runnable
-    # one used to be.
-    local tmp="$GAMMAGUI_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha256 against the digest in the release's API record"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$GAMMAGUI_APPIMAGE"
-        run curl -fsSL -o "$GAMMAGUI_DIR/icon.png" "https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png"
-        run "write $APPS_DIR/com.stalkergamma.gui.desktop"
-        prune_competing_launchers "com.stalkergamma.gui.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as every other AppImage
-        # here: a binary off the internet about to run with your user's privileges.
-        # A mismatch means a corrupt or truncated download and we stop rather than
-        # chmod it.
-        verify_gammagui "$tmp" "$digest" || { rm -f "$tmp"; die "Stalker GAMMA GUI download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$GAMMAGUI_APPIMAGE"
-
-        curl -fsSL -o "$GAMMAGUI_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$GAMMAGUI_REPO/main/packaging/icon-256.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_gammagui_desktop
-        prune_competing_launchers "com.stalkergamma.gui.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "Stalker GAMMA GUI $tag installed to $GAMMAGUI_APPIMAGE"
-    report "Stalker GAMMA GUI" "$tag (prebuilt AppImage) → $GAMMAGUI_APPIMAGE"
-}
-
-# Verify the AppImage against the sha256 digest the releases API reported for the
-# asset (the release ships no .sig or checksum file). Returns non-zero if the API
-# carried no digest or the hash doesn't match — "couldn't check" is treated as
-# "failed", never as "passed".
-verify_gammagui() {
+# Stalker GAMMA GUI and LoreRim: the sha256 digest the releases API reports for
+# the asset, which is the only checksum those releases publish.
+verify_sha256_digest() {
     local file="$1" digest="$2"
 
     [[ -n "$digest" ]] || { warn "no sha256 digest in the release's API record — cannot verify the download"; return 1; }
@@ -1901,302 +1671,36 @@ verify_gammagui() {
     return 1
 }
 
-# StartupWMClass matches what the app's own AppDir .desktop declares
-# (StalkerGamma.Gui — Avalonia takes it from the assembly name), so the taskbar
-# groups the running window under this launcher instead of showing a duplicate.
-write_gammagui_desktop() {
-    cat > "$APPS_DIR/com.stalkergamma.gui.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Stalker GAMMA GUI
-Comment=Download, install, update and play S.T.A.L.K.E.R. GAMMA (Steam/Proton)
-Exec=$GAMMAGUI_APPIMAGE
-Icon=$GAMMAGUI_DIR/icon.png
-Terminal=false
-Categories=Game;Utility;
-StartupNotify=true
-StartupWMClass=StalkerGamma.Gui
-EOF
-}
+# WotLK Autoinstall: the sha256 in the release's checksum-file asset, and the
+# API's per-asset digest must agree with it when the API reports one. Fails if
+# the checksum file is missing, carries no line for our asset, or either hash
+# disagrees.
+#
+#   $1 file  $2 URL of the checksum file  $3 API digest (may be empty)
+#   $4 our asset's name  $5 the checksum file's name, for messages
+verify_sha256sums() {
+    local file="$1" sums_url="$2" digest="$3" asset="$4" sums_name="$5"
 
-# ── 8. LoreRim Autoinstall (prebuilt AppImage) ────────────────────────────────
-# An Avalonia/.NET GUI that installs the LoreRim Wabbajack modlist for Skyrim —
-# Steam, Proton and Nexus handled automatically. Same GitHub-Releases-AppImage
-# shape as Stalker GAMMA GUI: no in-app updater, so the version stamp on re-run
-# is the update path. The release ships no signature or checksum asset, so the
-# download is verified against the sha256 digest the releases API reports for
-# the asset (integrity, not a signature — see the note by LORERIM_* above).
-install_lorerim() {
-    step "LoreRim Autoinstall"
-
-    local stamp="$LORERIM_DIR/.version"
-    local release tag url digest
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$LORERIM_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The asset name is already stable/unversioned. The trailing `"` keeps the
-    # match off any sibling asset URL that continues past `.AppImage`.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/LorerimAutoinstall-x86_64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no $LORERIM_ASSET asset in release $tag."
-
-    # The releases API reports each asset's sha256 in a `digest` field — the only
-    # checksum this release publishes anywhere. Matched to the asset by NAME via
-    # a real JSON parse, not a blind grep: a second asset added to some future
-    # release must not be able to swap its digest in for the AppImage's.
-    digest="$(printf '%s' "$release" | LORERIM_ASSET="$LORERIM_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["LORERIM_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null || true)"
-
-    if [[ -f "$LORERIM_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "LoreRim Autoinstall $tag already installed (no self-updater — a re-run picks up new releases)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/com.lorerim.autoinstall.desktop" || ! -f "$LORERIM_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$LORERIM_DIR" "https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png" write_lorerim_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.lorerim.autoinstall.desktop"
-
-        report "LoreRim" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$LORERIM_DIR" "$APPS_DIR"
-
-    info "Downloading LoreRim Autoinstall $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download never leaves a half-written AppImage where a runnable
-    # one used to be.
-    local tmp="$LORERIM_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha256 against the digest in the release's API record"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$LORERIM_APPIMAGE"
-        run curl -fsSL -o "$LORERIM_DIR/icon.png" "https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png"
-        run "write $APPS_DIR/com.lorerim.autoinstall.desktop"
-        prune_competing_launchers "com.lorerim.autoinstall.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as every other AppImage
-        # here: a binary off the internet about to run with your user's privileges.
-        # A mismatch means a corrupt or truncated download and we stop rather than
-        # chmod it.
-        verify_lorerim "$tmp" "$digest" || { rm -f "$tmp"; die "LoreRim Autoinstall download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$LORERIM_APPIMAGE"
-
-        curl -fsSL -o "$LORERIM_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$LORERIM_REPO/main/packaging/icon-256.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_lorerim_desktop
-        prune_competing_launchers "com.lorerim.autoinstall.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "LoreRim Autoinstall $tag installed to $LORERIM_APPIMAGE"
-    report "LoreRim" "$tag (prebuilt AppImage) → $LORERIM_APPIMAGE"
-}
-
-# Verify the AppImage against the sha256 digest the releases API reported for the
-# asset (the release ships no .sig or checksum file). Returns non-zero if the API
-# carried no digest or the hash doesn't match — "couldn't check" is treated as
-# "failed", never as "passed".
-verify_lorerim() {
-    local file="$1" digest="$2"
-
-    [[ -n "$digest" ]] || { warn "no sha256 digest in the release's API record — cannot verify the download"; return 1; }
-
-    local actual
-    actual="$(sha256sum "$file" | awk '{print $1}')"
-
-    if [[ "$actual" == "$digest" ]]; then
-        ok "checksum verified (sha256, from the releases API)"
-        return 0
-    fi
-
-    warn "CHECKSUM MISMATCH — the download does not match the API's sha256 digest"
-    warn "  expected: $digest"
-    warn "  got:      $actual"
-    return 1
-}
-
-# StartupWMClass matches what the app's own AppDir .desktop declares
-# (Lorerim.Gui — Avalonia takes it from the assembly name), so the taskbar
-# groups the running window under this launcher instead of showing a duplicate.
-# MimeType/%u mirror that .desktop too: the app registers as the handler for
-# jackify: links (Nexus downloads), and refresh_desktop_db's
-# update-desktop-database is what makes the scheme registration take effect.
-write_lorerim_desktop() {
-    cat > "$APPS_DIR/com.lorerim.autoinstall.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=LoreRim Autoinstall
-Comment=One-click LoreRim (Wabbajack) installer for Linux
-Exec=$LORERIM_APPIMAGE %u
-Icon=$LORERIM_DIR/icon.png
-Terminal=false
-Categories=Game;Utility;
-StartupNotify=true
-StartupWMClass=Lorerim.Gui
-MimeType=x-scheme-handler/jackify;
-EOF
-}
-
-# ── 9. WotLK Autoinstall (prebuilt AppImage) ──────────────────────────────────
-# An Avalonia/.NET GUI that installs a World of Warcraft 3.3.5a client for a
-# local server — client download, realmlist, addons and a Steam/Proton shortcut.
-# Same GitHub-Releases-AppImage shape as Stalker GAMMA GUI and LoreRim: no
-# in-app updater, so the version stamp on re-run is the update path. Unlike
-# those two, the release publishes a SHA256SUMS file, which is what the download
-# is verified against — see the note by WOTLK_* above for what that does and
-# doesn't prove.
-install_wotlk() {
-    step "WotLK Autoinstall"
-
-    local stamp="$WOTLK_DIR/.version"
-    local release tag url sums_url digest
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$WOTLK_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # The asset name is already stable/unversioned. The trailing `"` keeps the
-    # match off any sibling asset URL that continues past `.AppImage`.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/WowWotlkAutoinstall-x86_64\.AppImage"' | head -1 | tr -d '"' || true)"
-    # Anchored on /download/ so this can only match a release asset URL, and the
-    # trailing `"` keeps it off anything whose name merely starts with SHA256SUMS.
-    sums_url="$(printf '%s' "$release" | grep -o "https://[^\"]*/download/[^\"]*/$WOTLK_SUMS\"" | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no $WOTLK_ASSET asset in release $tag."
-
-    # The releases API also reports a per-asset sha256, matched to the asset by
-    # NAME via a real JSON parse rather than a blind grep: a second asset added
-    # to some future release must not be able to swap its digest in for the
-    # AppImage's. Cross-checked against SHA256SUMS below — SHA256SUMS is written
-    # by CI at build time, this is computed by GitHub on upload, so agreement
-    # says the file being served is the file CI built.
-    digest="$(printf '%s' "$release" | WOTLK_ASSET="$WOTLK_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["WOTLK_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null || true)"
-
-    if [[ -f "$WOTLK_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "WotLK Autoinstall $tag already installed (no self-updater — a re-run picks up new releases)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/com.wowwotlk.autoinstall.desktop" || ! -f "$WOTLK_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$WOTLK_DIR" "https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png" write_wotlk_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "com.wowwotlk.autoinstall.desktop"
-
-        report "WotLK" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$WOTLK_DIR" "$APPS_DIR"
-
-    info "Downloading WotLK Autoinstall $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted download never leaves a half-written AppImage where a runnable
-    # one used to be.
-    local tmp="$WOTLK_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify sha256 against the release's SHA256SUMS"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$WOTLK_APPIMAGE"
-        run curl -fsSL -o "$WOTLK_DIR/icon.png" "https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png"
-        run "write $APPS_DIR/com.wowwotlk.autoinstall.desktop"
-        prune_competing_launchers "com.wowwotlk.autoinstall.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as every other AppImage
-        # here: a binary off the internet about to run with your user's privileges.
-        # A mismatch means a corrupt or truncated download and we stop rather than
-        # chmod it.
-        verify_wotlk "$tmp" "$sums_url" "$digest" || { rm -f "$tmp"; die "WotLK Autoinstall download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$WOTLK_APPIMAGE"
-
-        curl -fsSL -o "$WOTLK_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$WOTLK_REPO/main/packaging/icon-256.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_wotlk_desktop
-        prune_competing_launchers "com.wowwotlk.autoinstall.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-    fi
-
-    ok "WotLK Autoinstall $tag installed to $WOTLK_APPIMAGE"
-    report "WotLK" "$tag (prebuilt AppImage) → $WOTLK_APPIMAGE"
-}
-
-# Verify the AppImage against the sha256 in the release's SHA256SUMS asset, and
-# require the API's per-asset digest to agree when the API reports one. Returns
-# non-zero if SHA256SUMS is missing, carries no line for our asset, or either
-# hash disagrees — "couldn't check" is treated as "failed", never as "passed".
-verify_wotlk() {
-    local file="$1" sums_url="$2" digest="$3"
-
-    [[ -n "$sums_url" ]] || { warn "no $WOTLK_SUMS asset in the release — cannot verify the download"; return 1; }
+    [[ -n "$sums_url" ]] || { warn "no $sums_name asset in the release — cannot verify the download"; return 1; }
 
     local sums
     sums="$(curl -fsSL "$sums_url" 2>/dev/null)" \
-        || { warn "couldn't fetch $WOTLK_SUMS — cannot verify the download"; return 1; }
+        || { warn "couldn't fetch $sums_name — cannot verify the download"; return 1; }
 
     # Pull the line for OUR asset by name rather than taking the first hash in
     # the file: a release that later adds a second binary would otherwise be
     # checked against whichever line happened to come first.
     local expected
-    expected="$(printf '%s\n' "$sums" | awk -v n="$WOTLK_ASSET" '$2 == n || $2 == "*" n { print $1; exit }')"
+    expected="$(printf '%s\n' "$sums" | awk -v n="$asset" '$2 == n || $2 == "*" n { print $1; exit }')"
     [[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
-        || { warn "no sha256 for $WOTLK_ASSET in $WOTLK_SUMS — cannot verify the download"; return 1; }
+        || { warn "no sha256 for $asset in $sums_name — cannot verify the download"; return 1; }
 
     # A disagreement here means the asset being served isn't the one CI hashed.
     # Both records come from the same host, so this is a consistency check, not
     # a signature — but a re-uploaded asset that nobody re-hashed fails it.
     if [[ -n "$digest" && "$digest" != "$expected" ]]; then
-        warn "DIGEST DISAGREEMENT — $WOTLK_SUMS and the releases API report different hashes"
-        warn "  $WOTLK_SUMS: $expected"
+        warn "DIGEST DISAGREEMENT — $sums_name and the releases API report different hashes"
+        warn "  $sums_name: $expected"
         warn "  releases API:  $digest"
         return 1
     fi
@@ -2205,180 +1709,14 @@ verify_wotlk() {
     actual="$(sha256sum "$file" | awk '{print $1}')"
 
     if [[ "$actual" == "$expected" ]]; then
-        ok "checksum verified (sha256, from $WOTLK_SUMS)"
+        ok "checksum verified (sha256, from $sums_name)"
         return 0
     fi
 
-    warn "CHECKSUM MISMATCH — the download does not match $WOTLK_SUMS"
+    warn "CHECKSUM MISMATCH — the download does not match $sums_name"
     warn "  expected: $expected"
     warn "  got:      $actual"
     return 1
-}
-
-# StartupWMClass matches what the app's own AppDir .desktop declares
-# (WowWotlk.Gui — Avalonia takes it from the assembly name), so the taskbar
-# groups the running window under this launcher instead of showing a duplicate.
-# No MimeType/%u here, unlike LoreRim: this app registers no URL scheme, and a
-# %u on an Exec that ignores it is just noise desktop-file-validate tolerates.
-write_wotlk_desktop() {
-    cat > "$APPS_DIR/com.wowwotlk.autoinstall.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=WotLK Autoinstall
-Comment=One-click WoW 3.3.5a client installer for Linux
-Exec=$WOTLK_APPIMAGE
-Icon=$WOTLK_DIR/icon.png
-Terminal=false
-Categories=Game;Utility;
-StartupNotify=true
-StartupWMClass=WowWotlk.Gui
-EOF
-}
-
-# ── 10. Music AI Player (prebuilt AppImage) ───────────────────────────────────
-# A local music player for long coding sessions — SQLite library, crossfade,
-# shuffle, playlists, visualizer, tray and media keys. Same shape as ConsoleVault
-# and GridDown (Tauri, updater on, minisign-signed release), so the download is
-# checked against the embedded public key before it's made executable. Version
-# stamped like the rest, though the app self-updates from here on.
-install_musicai() {
-    step "Music AI Player"
-
-    local stamp="$MUSICAI_DIR/.version"
-    local release tag url
-
-    info "Checking latest release..."
-    release="$(github_api "https://api.github.com/repos/$MUSICAI_REPO/releases/latest")" \
-        || die "couldn't fetch the latest release from GitHub."
-    # `|| true` guards against grep's exit-1-on-no-match tripping pipefail+set -e
-    # before the clear messages below can run — same reasoning as StreamHub.
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
-    # Versioned Tauri asset name (Music.AI.Player_x.y.z_amd64.AppImage), matched
-    # by its suffix as ConsoleVault's is. The trailing `"` is what keeps this off
-    # the sibling ..._amd64.AppImage.sig URL, which continues past `.AppImage`;
-    # the `.AppImage` itself keeps it off the ..._amd64.deb the release also ships.
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"' || true)"
-
-    [[ -n "$tag" ]] || die "couldn't read a tag from the latest release."
-    [[ -n "$url" ]] || die "no Music AI Player _amd64.AppImage asset in release $tag."
-
-    if [[ -f "$MUSICAI_APPIMAGE" && -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$tag" ]]; then
-        skip "Music AI Player $tag already installed (it self-updates from here on)"
-
-        # Same launcher-repair path as the others: a matching stamp would otherwise
-        # skip this step forever, stranding a deleted .desktop or icon.
-        if [[ ! -f "$APPS_DIR/music-ai-player.desktop" || ! -f "$MUSICAI_DIR/icon.png" ]]; then
-            info "Launcher missing — recreating it..."
-            repair_app_launcher "$MUSICAI_DIR" "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png" write_musicai_desktop
-        fi
-
-        # Outside the repair branch above on purpose: that only fires when ours
-        # is missing or stale, and a stray can sit beside a perfectly good one.
-        prune_competing_launchers "music-ai-player.desktop"
-
-        report "Music AI Player" "$tag already installed"
-        return
-    fi
-
-    run mkdir -p "$BIN_DIR" "$MUSICAI_DIR" "$APPS_DIR"
-
-    info "Downloading Music AI Player $tag..."
-    # Temp file beside the target, moved into place only after it verifies — an
-    # interrupted or unverifiable download never replaces a working AppImage.
-    local tmp="$MUSICAI_APPIMAGE.partial"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        run curl -fL --progress-bar -o "$tmp" "$url"
-        run "verify minisign signature against the embedded public key"
-        run chmod +x "$tmp"
-        run mv -f "$tmp" "$MUSICAI_APPIMAGE"
-        run curl -fsSL -o "$MUSICAI_DIR/icon.png" "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png"
-        run "write $APPS_DIR/music-ai-player.desktop"
-        prune_competing_launchers "music-ai-player.desktop"
-        run "stamp version $tag"
-    else
-        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed."; }
-
-        # Verify before making it executable — same stance as every other AppImage
-        # here: a binary off the internet about to run with your user's privileges,
-        # and Tauri signs every release, so there's no reason to trust it blind.
-        verify_musicai "$tmp" "$url" || { rm -f "$tmp"; die "Music AI Player download could not be verified — refusing to install it."; }
-
-        chmod +x "$tmp"
-        mv -f "$tmp" "$MUSICAI_APPIMAGE"
-
-        curl -fsSL -o "$MUSICAI_DIR/icon.png" \
-            "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png" \
-            || warn "couldn't fetch the icon — the launcher entry will fall back to a generic one"
-
-        write_musicai_desktop
-        prune_competing_launchers "music-ai-player.desktop"
-        printf '%s\n' "$tag" > "$stamp"
-        refresh_desktop_db
-
-        # The player itself needs nothing else, but its YouTube importer shells out
-        # to yt-dlp and ffmpeg on PATH. Both are in packages/pacman.txt, so this
-        # only fires under `--only musicai` on a box that skipped that step — say
-        # so once rather than letting the Import panel be the one to explain it.
-        if ! have yt-dlp || ! have ffmpeg; then
-            warn "yt-dlp and/or ffmpeg are missing — playback works, but the YouTube importer won't (run this without --only, or: sudo pacman -S --needed yt-dlp ffmpeg)"
-        fi
-    fi
-
-    ok "Music AI Player $tag installed to $MUSICAI_APPIMAGE"
-    report "Music AI Player" "$tag (prebuilt AppImage) → $MUSICAI_APPIMAGE"
-}
-
-# Verify the AppImage against the minisign signature published beside it
-# (…AppImage.sig), using the key baked into this script. Returns non-zero if the
-# signature is missing, malformed or doesn't match — "couldn't check" is treated
-# exactly like "failed", never like "passed".
-verify_musicai() {
-    local file="$1" url="$2"
-
-    # minisign is in packages/pacman.txt (for ConsoleVault), but `--only musicai`
-    # can reach here without the packages step, so pull it in rather than failing.
-    if ! have minisign; then
-        info "Installing minisign (needed to verify the download)..."
-        run sudo pacman -S --needed --noconfirm minisign \
-            || { warn "couldn't install minisign — cannot verify the download"; return 1; }
-    fi
-
-    # Tauri publishes the .sig as base64 of the actual minisign signature file, so
-    # it has to be decoded before minisign will read it.
-    local sig="$file.minisig"
-    curl -fsSL "$url.sig" 2>/dev/null | base64 -d > "$sig" 2>/dev/null \
-        || { warn "couldn't fetch/decode the .sig — cannot verify the download"; rm -f "$sig"; return 1; }
-    [[ -s "$sig" ]] || { warn "empty signature — cannot verify the download"; rm -f "$sig"; return 1; }
-
-    if minisign -Vm "$file" -x "$sig" -P "$MUSICAI_PUBKEY" >/dev/null 2>&1; then
-        rm -f "$sig"
-        ok "signature verified (minisign)"
-        return 0
-    fi
-
-    rm -f "$sig"
-    warn "SIGNATURE MISMATCH — the download does not match the published minisign signature"
-    return 1
-}
-
-# Named music-ai-player.desktop, not com.<app>.app.desktop like the others: on
-# Wayland the compositor matches a running window to a .desktop by its app-id,
-# which Tauri takes from the crate name ("music-ai-player" here) — so a
-# com.musicaiplayer.app.desktop would leave the running window with a generic
-# icon. StartupWMClass carries the same value for X11's WM_CLASS match.
-write_musicai_desktop() {
-    cat > "$APPS_DIR/music-ai-player.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Music AI Player
-Comment=Local music player — YouTube import, folder scan, ACE-Step generation
-Exec=$MUSICAI_APPIMAGE
-Icon=$MUSICAI_DIR/icon.png
-Terminal=false
-Categories=AudioVideo;Audio;Player;
-StartupNotify=true
-StartupWMClass=music-ai-player
-EOF
 }
 
 # ── 11. system config ─────────────────────────────────────────────────────────

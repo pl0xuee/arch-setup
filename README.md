@@ -18,7 +18,7 @@ Safe to re-run — a second run is a no-op.
 ./install.sh --only config         # just the desktop/Brave config
 ./install.sh --only omarchy        # just the Omarchy bar, theme and Hyprland rules
 ./install.sh --desktop omarchy     # force the desktop instead of detecting it
-./tests/run.sh                     # 300+ tests, no VM needed
+./tests/run.sh                     # 650+ tests, no VM needed
 ```
 
 **On KDE, log in once before running it.** Plasma doesn't write its panel config

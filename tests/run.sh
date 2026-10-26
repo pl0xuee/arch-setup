@@ -69,116 +69,6 @@ else
     pass "install_packages doesn't end on a bare [[ ]] && ..."
 fi
 
-# grep exits 1 on no-match; under pipefail that propagates to the assignment and
-# set -e kills the script BEFORE the `|| die` on the next line can report it.
-if awk '/^install_streamhub\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*StreamHub.*|| true'; then
-    pass "StreamHub asset parsing survives a no-match (|| true)"
-else
-    fail "StreamHub asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-if awk '/^install_consolevault\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*_amd64.*|| true'; then
-    pass "ConsoleVault asset parsing survives a no-match (|| true)"
-else
-    fail "ConsoleVault asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-if awk '/^install_discripper\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*DiscRipper.*|| true'; then
-    pass "Disc Ripper asset parsing survives a no-match (|| true)"
-else
-    fail "Disc Ripper asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-# Disc Ripper's release has no signature/checksum asset — it verifies against the
-# .zsync's SHA-1/length. Assert the verify step exists and is actually wired into
-# the install path, so a refactor can't quietly drop the only integrity check.
-if awk '/^verify_discripper\(\)/,/^}/' "$SCRIPT" | grep -q 'sha1sum'; then
-    pass "Disc Ripper verifies the download against the .zsync sha1"
-else
-    fail "Disc Ripper verifies the download" "verify_discripper no longer checks a sha1"
-fi
-if awk '/^install_discripper\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_discripper .* || .*die'; then
-    pass "Disc Ripper aborts the install on a failed verify"
-else
-    fail "Disc Ripper aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-
-if awk '/^install_griddown\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*_amd64.*|| true'; then
-    pass "GridDown asset parsing survives a no-match (|| true)"
-else
-    fail "GridDown asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-if awk '/^install_gammagui\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*StalkerGammaGui.*|| true'; then
-    pass "Stalker GAMMA GUI asset parsing survives a no-match (|| true)"
-else
-    fail "Stalker GAMMA GUI asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-if awk '/^install_lorerim\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*LorerimAutoinstall.*|| true'; then
-    pass "LoreRim Autoinstall asset parsing survives a no-match (|| true)"
-else
-    fail "LoreRim Autoinstall asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-if awk '/^install_wotlk\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*WowWotlkAutoinstall.*|| true'; then
-    pass "WotLK Autoinstall asset parsing survives a no-match (|| true)"
-else
-    fail "WotLK Autoinstall asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-
-# The SHA256SUMS URL is grepped out of the same release JSON, and a no-match
-# there has to reach verify_wotlk's "cannot verify" message rather than exiting
-# silently under pipefail.
-if awk '/^install_wotlk\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*download.*SUMS.*|| true'; then
-    pass "WotLK SHA256SUMS parsing survives a no-match (|| true)"
-else
-    fail "WotLK SHA256SUMS parsing survives a no-match" \
-         "a release without SHA256SUMS would exit 1 with no message"
-fi
-
-# Both new steps must abort rather than chmod an unverified download — same stance
-# as the three above, asserted so a refactor can't quietly drop the check.
-if awk '/^install_griddown\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_griddown .* || .*die'; then
-    pass "GridDown aborts the install on a failed verify"
-else
-    fail "GridDown aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-if awk '/^install_gammagui\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_gammagui .* || .*die'; then
-    pass "Stalker GAMMA GUI aborts the install on a failed verify"
-else
-    fail "Stalker GAMMA GUI aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-if awk '/^install_lorerim\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_lorerim .* || .*die'; then
-    pass "LoreRim Autoinstall aborts the install on a failed verify"
-else
-    fail "LoreRim Autoinstall aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-if awk '/^install_wotlk\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_wotlk .* || .*die'; then
-    pass "WotLK Autoinstall aborts the install on a failed verify"
-else
-    fail "WotLK Autoinstall aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-
-if awk '/^install_musicai\(\)/,/^}/' "$SCRIPT" | grep -q 'grep -o .*_amd64.*|| true'; then
-    pass "Music AI Player asset parsing survives a no-match (|| true)"
-else
-    fail "Music AI Player asset parsing survives a no-match" \
-         "a renamed asset would exit 1 with no message instead of the intended die"
-fi
-if awk '/^install_musicai\(\)/,/^}/' "$SCRIPT" | grep -q 'verify_musicai .* || .*die'; then
-    pass "Music AI Player aborts the install on a failed verify"
-else
-    fail "Music AI Player aborts on failed verify" "the download is chmod'd without a passing verify"
-fi
-
 # `--only` with no value: `shift 2` fails, set -e exits, user sees nothing.
 out="$(bash "$SCRIPT" --only 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && pass "--only with no value exits non-zero" || fail "--only with no value exits non-zero"
@@ -774,430 +664,6 @@ else
     fail "pacman runs with --noconfirm"
 fi
 
-# ── GitHub release-API parsing ────────────────────────────────────────────────
-group "StreamHub release-API parsing"
-
-release="$(github_api "https://api.github.com/repos/$STREAMHUB_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$release" ]]; then
-    fail "fetched the latest release" "empty response (rate-limited?)"
-else
-    pass "fetched the latest release"
-
-    tag="$(printf '%s' "$release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    url="$(printf '%s' "$release" | grep -o 'https://[^"]*/StreamHub\.AppImage' | head -1)"
-
-    [[ "$tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($tag)" \
-                                     || fail "tag parses as a version" "$tag"
-    check_contains "asset URL ends in StreamHub.AppImage" "StreamHub.AppImage" "$url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$url"
-
-    # The unversioned filename is load-bearing: electron-updater only overwrites
-    # in place when the name carries no version. A versioned asset would mean the
-    # in-app updater writes a NEW file and every shortcut we create breaks.
-    if [[ "$url" =~ StreamHub-[0-9] ]]; then
-        fail "asset name carries no version" "$url"
-    else
-        pass "asset name carries no version (in-place self-update works)"
-    fi
-
-    # The URL must actually serve a file — catches a renamed/pulled asset.
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── the AppImage is verified before it's made executable ──────────────────────
-group "StreamHub checksum verification"
-
-# This is the one binary the script downloads and runs directly, so a missing or
-# skipped checksum check is a real supply-chain hole, not a nicety.
-if grep -qF 'verify_streamhub "$tmp" "$tag" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-# A failure to FETCH the checksum must also abort — "couldn't verify" is not
-# "verified", and must not degrade into installing the thing anyway.
-if awk '/^verify_streamhub\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unfetchable checksum aborts rather than warning"
-else
-    fail "an unfetchable checksum aborts rather than warning"
-fi
-
-# And prove the real thing actually verifies: fetch the published sha512 and
-# check it's the right shape (base64 sha512 = 88 chars ending in '==').
-if [[ -n "${tag:-}" ]]; then
-    yml="$(curl -fsSL "https://github.com/$STREAMHUB_REPO/releases/download/$tag/latest-linux.yml" 2>/dev/null)"
-    sha="$(grep -m1 '^sha512:' <<<"$yml" | awk '{print $2}')"
-    if [[ ${#sha} -eq 88 ]]; then
-        pass "release publishes a base64 sha512 we can check against"
-    else
-        fail "release publishes a base64 sha512" "got ${#sha} chars: ${sha:0:20}..."
-    fi
-fi
-
-# ── generated .desktop file ───────────────────────────────────────────────────
-group "Generated .desktop file"
-
-APPS_DIR="$tmp"                                   # redirect the writer at a temp dir
-STREAMHUB_APPIMAGE="/home/user/.local/bin/StreamHub.AppImage"
-STREAMHUB_DIR="/home/user/.local/share/streamhub"
-write_streamhub_desktop
-
-desktop="$tmp/com.streamhub.app.desktop"
-[[ -f "$desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-content="$(cat "$desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$content"
-check_contains "Exec points at the AppImage" "Exec=$STREAMHUB_APPIMAGE" "$content"
-check_contains "Icon uses an absolute path"  "Icon=$STREAMHUB_DIR/icon.png" "$content"
-check_contains "Type=Application" "Type=Application" "$content"
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
-    else
-        fail "passes desktop-file-validate" "$err"
-    fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
-fi
-
-# ── ConsoleVault release-API parsing ──────────────────────────────────────────
-group "ConsoleVault release-API parsing"
-
-cv_release="$(github_api "https://api.github.com/repos/$CONSOLEVAULT_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$cv_release" ]]; then
-    fail "fetched the latest release" "empty response (rate-limited?)"
-else
-    pass "fetched the latest release"
-
-    cv_tag="$(printf '%s' "$cv_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    # Same pattern the installer uses: the trailing quote is what excludes the
-    # sibling .AppImage.sig asset.
-    cv_url="$(printf '%s' "$cv_release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"')"
-
-    [[ "$cv_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($cv_tag)" \
-                                        || fail "tag parses as a version" "$cv_tag"
-    check_contains "asset URL ends in _amd64.AppImage" "_amd64.AppImage" "$cv_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$cv_url"
-
-    # The pattern must not pick up the detached signature as the download target.
-    if [[ "$cv_url" == *.sig ]]; then
-        fail "asset URL is the AppImage, not the .sig" "$cv_url"
-    else
-        pass "asset URL is the AppImage, not the .sig"
-    fi
-
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$cv_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── the AppImage is verified before it's made executable ──────────────────────
-group "ConsoleVault signature verification"
-
-# Same supply-chain concern as StreamHub: this binary is downloaded and then run
-# with the user's privileges, so verification can't be skippable.
-if grep -qF 'verify_consolevault "$tmp" "$url" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-# An unfetchable/undecodable signature must abort, not warn-and-continue.
-if awk '/^verify_consolevault\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable signature aborts rather than warning"
-else
-    fail "an unverifiable signature aborts rather than warning"
-fi
-
-# The public key is hard-coded, never fetched from the release host (which would
-# defeat the point). Prove nothing in the verify path pulls the key off the wire.
-if awk '/^verify_consolevault\(\)/,/^}/' "$SCRIPT" | grep -qi 'pubkey.*curl\|curl.*pubkey\|tauri.conf'; then
-    fail "public key is embedded, not fetched at runtime"
-else
-    pass "public key is embedded, not fetched at runtime"
-fi
-
-# And prove the real thing verifies: fetch the signed AppImage + its .sig and run
-# minisign against the embedded key. Skipped where minisign or the net is absent.
-if have minisign && [[ -n "${cv_tag:-}" && -n "${cv_url:-}" ]]; then
-    cvd="$(mktemp -d)"
-    if curl -fsSL "$cv_url" -o "$cvd/app.AppImage" 2>/dev/null \
-       && curl -fsSL "$cv_url.sig" 2>/dev/null | base64 -d > "$cvd/app.AppImage.minisig" 2>/dev/null; then
-        if minisign -Vm "$cvd/app.AppImage" -x "$cvd/app.AppImage.minisig" -P "$CONSOLEVAULT_PUBKEY" >/dev/null 2>&1; then
-            pass "real release verifies against the embedded public key"
-        else
-            fail "real release verifies against the embedded public key" "minisign rejected it"
-        fi
-    else
-        printf '  %s·%s couldn'\''t download the release — skipping live verify\n' "$DIM" "$RESET"
-    fi
-    rm -rf "$cvd"
-else
-    printf '  %s·%s minisign not installed — skipping live signature check\n' "$DIM" "$RESET"
-fi
-
-# ── generated .desktop file ───────────────────────────────────────────────────
-group "ConsoleVault .desktop file"
-
-APPS_DIR="$tmp"
-CONSOLEVAULT_APPIMAGE="/home/user/.local/bin/ConsoleVault.AppImage"
-CONSOLEVAULT_DIR="/home/user/.local/share/consolevault"
-write_consolevault_desktop
-
-cv_desktop="$tmp/com.consolevault.app.desktop"
-[[ -f "$cv_desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-cv_content="$(cat "$cv_desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$cv_content"
-check_contains "Exec points at the AppImage" "Exec=$CONSOLEVAULT_APPIMAGE" "$cv_content"
-check_contains "Icon uses an absolute path"  "Icon=$CONSOLEVAULT_DIR/icon.png" "$cv_content"
-check_contains "Type=Application" "Type=Application" "$cv_content"
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$cv_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
-    else
-        fail "passes desktop-file-validate" "$err"
-    fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
-fi
-
-# ── GridDown release-API parsing ──────────────────────────────────────────────
-group "GridDown release-API parsing"
-
-gd_release="$(github_api "https://api.github.com/repos/$GRIDDOWN_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$gd_release" || "$gd_release" == *'"Not Found"'* ]]; then
-    # GridDown's first release may not be published yet; the installer dies with a
-    # clear message in that case, which is the intended behaviour, not a test bug.
-    printf '  %s·%s no published release yet — skipping live release checks\n' "$DIM" "$RESET"
-else
-    pass "fetched the latest release"
-
-    gd_tag="$(printf '%s' "$gd_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    gd_url="$(printf '%s' "$gd_release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"')"
-
-    [[ "$gd_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($gd_tag)" \
-                                        || fail "tag parses as a version" "$gd_tag"
-    check_contains "asset URL ends in _amd64.AppImage" "_amd64.AppImage" "$gd_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$gd_url"
-
-    if [[ "$gd_url" == *.sig ]]; then
-        fail "asset URL is the AppImage, not the .sig" "$gd_url"
-    else
-        pass "asset URL is the AppImage, not the .sig"
-    fi
-
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$gd_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── GridDown signature verification ───────────────────────────────────────────
-group "GridDown signature verification"
-
-if grep -qF 'verify_griddown "$tmp" "$url" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-# A repo with no published release yet must warn+skip, not abort the whole run —
-# but only for 404. A release that exists with a bad/missing asset must still die,
-# so the skip can't quietly become a blanket "ignore all failures".
-if awk '/^install_griddown\(\)/,/^}/' "$SCRIPT" | grep -q '"404"'; then
-    pass "no published release warns and skips rather than aborting the run"
-else
-    fail "no published release warns and skips" "an unreleased app would kill the whole installer"
-fi
-if awk '/^install_griddown\(\)/,/^}/' "$SCRIPT" | grep -q 'no GridDown _amd64.AppImage asset.*\|| die\|die "no GridDown'; then
-    pass "a published release with no AppImage asset still dies"
-else
-    fail "a published release with no AppImage asset still dies" "the 404 skip may have swallowed real failures"
-fi
-
-if awk '/^verify_griddown\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable signature aborts rather than warning"
-else
-    fail "an unverifiable signature aborts rather than warning"
-fi
-
-# The key is embedded, never pulled off the wire from the host it vouches for.
-if awk '/^verify_griddown\(\)/,/^}/' "$SCRIPT" | grep -qi 'pubkey.*curl\|curl.*pubkey\|tauri.conf'; then
-    fail "public key is embedded, not fetched at runtime"
-else
-    pass "public key is embedded, not fetched at runtime"
-fi
-
-# The pubkey in install.sh must match what the app actually ships in its Tauri
-# config (stored there as base64 of the whole minisign key file). A drift here
-# means every download would fail verification — catch it at test time.
-gd_conf="$(curl -fsSL "https://raw.githubusercontent.com/$GRIDDOWN_REPO/$GRIDDOWN_BRANCH/src-tauri/tauri.conf.json" 2>/dev/null || true)"
-if [[ -n "$gd_conf" ]]; then
-    gd_conf_key="$(printf '%s' "$gd_conf" | grep -m1 '"pubkey"' | cut -d'"' -f4 | base64 -d 2>/dev/null | tail -1 || true)"
-    if [[ -n "$gd_conf_key" ]]; then
-        check_eq "embedded pubkey matches the app's tauri.conf.json" "$gd_conf_key" "$GRIDDOWN_PUBKEY"
-    else
-        printf '  %s·%s couldn'\''t decode the pubkey from tauri.conf.json — skipping\n' "$DIM" "$RESET"
-    fi
-else
-    printf '  %s·%s couldn'\''t fetch tauri.conf.json — skipping pubkey cross-check\n' "$DIM" "$RESET"
-fi
-
-# And prove the real release verifies against the embedded key.
-if have minisign && [[ -n "${gd_tag:-}" && -n "${gd_url:-}" ]]; then
-    gdd="$(mktemp -d)"
-    if curl -fsSL "$gd_url" -o "$gdd/app.AppImage" 2>/dev/null \
-       && curl -fsSL "$gd_url.sig" 2>/dev/null | base64 -d > "$gdd/app.AppImage.minisig" 2>/dev/null; then
-        if minisign -Vm "$gdd/app.AppImage" -x "$gdd/app.AppImage.minisig" -P "$GRIDDOWN_PUBKEY" >/dev/null 2>&1; then
-            pass "real release verifies against the embedded public key"
-        else
-            fail "real release verifies against the embedded public key" "minisign rejected it"
-        fi
-    else
-        printf '  %s·%s couldn'\''t download the release — skipping live verify\n' "$DIM" "$RESET"
-    fi
-    rm -rf "$gdd"
-else
-    printf '  %s·%s minisign missing or no release — skipping live signature check\n' "$DIM" "$RESET"
-fi
-
-# ── GridDown .desktop file ────────────────────────────────────────────────────
-group "GridDown .desktop file"
-
-APPS_DIR="$tmp"
-GRIDDOWN_APPIMAGE="/home/user/.local/bin/GridDown.AppImage"
-GRIDDOWN_DIR="/home/user/.local/share/griddown"
-write_griddown_desktop
-
-gd_desktop="$tmp/com.griddown.app.desktop"
-[[ -f "$gd_desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-gd_content="$(cat "$gd_desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$gd_content"
-check_contains "Exec points at the AppImage" "Exec=$GRIDDOWN_APPIMAGE" "$gd_content"
-check_contains "Icon uses an absolute path"  "Icon=$GRIDDOWN_DIR/icon.png" "$gd_content"
-check_contains "Type=Application" "Type=Application" "$gd_content"
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$gd_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
-    else
-        fail "passes desktop-file-validate" "$err"
-    fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
-fi
-
-# ── Stalker GAMMA GUI release-API parsing ─────────────────────────────────────
-group "Stalker GAMMA GUI release-API parsing"
-
-gg_release="$(github_api "https://api.github.com/repos/$GAMMAGUI_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$gg_release" ]]; then
-    fail "fetched the latest release" "empty response (rate-limited?)"
-else
-    pass "fetched the latest release"
-
-    gg_tag="$(printf '%s' "$gg_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    gg_url="$(printf '%s' "$gg_release" | grep -o 'https://[^"]*/StalkerGammaGui-x86_64\.AppImage"' | head -1 | tr -d '"')"
-
-    [[ "$gg_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($gg_tag)" \
-                                        || fail "tag parses as a version" "$gg_tag"
-    check_contains "asset URL ends in the AppImage name" "$GAMMAGUI_ASSET" "$gg_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$gg_url"
-
-    # The stable asset name is load-bearing: a versioned name would break the
-    # installer's grep and every re-run's update path.
-    if [[ "$gg_url" =~ StalkerGammaGui-[0-9] ]]; then
-        fail "asset name carries no version" "$gg_url"
-    else
-        pass "asset name carries no version (re-run updates keep working)"
-    fi
-
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$gg_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── Stalker GAMMA GUI checksum verification ───────────────────────────────────
-group "Stalker GAMMA GUI checksum verification"
-
-if grep -qF 'verify_gammagui "$tmp" "$digest" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-if awk '/^verify_gammagui\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable checksum aborts rather than warning"
-else
-    fail "an unverifiable checksum aborts rather than warning"
-fi
-
-# The API's per-asset digest is the only checksum this release publishes — prove
-# it's actually there and the right shape, using the installer's own extraction.
-# If GitHub ever drops or renames the field, the installer would refuse every
-# download, and this is where we'd find out.
-if [[ -n "$gg_release" ]]; then
-    gg_digest="$(printf '%s' "$gg_release" | GAMMAGUI_ASSET="$GAMMAGUI_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["GAMMAGUI_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null)"
-    if [[ "$gg_digest" =~ ^[0-9a-f]{64}$ ]]; then
-        pass "releases API carries a sha256 digest for the asset"
-    else
-        fail "releases API carries a sha256 digest" "got: ${gg_digest:-nothing}"
-    fi
-
-    # Prove the digest matches the real asset — a mismatch here means either a
-    # bad release or a broken verify path, and both would refuse every install.
-    if [[ -n "${gg_url:-}" && "$gg_digest" =~ ^[0-9a-f]{64}$ ]]; then
-        ggd="$(mktemp -d)"
-        if curl -fsSL "$gg_url" -o "$ggd/app.AppImage" 2>/dev/null; then
-            gg_actual="$(sha256sum "$ggd/app.AppImage" | awk '{print $1}')"
-            check_eq "real release matches the API's sha256 digest" "$gg_digest" "$gg_actual"
-        else
-            printf '  %s·%s couldn'\''t download the release — skipping live checksum\n' "$DIM" "$RESET"
-        fi
-        rm -rf "$ggd"
-    fi
-fi
-
-# ── Stalker GAMMA GUI .desktop file ───────────────────────────────────────────
-group "Stalker GAMMA GUI .desktop file"
-
-APPS_DIR="$tmp"
-GAMMAGUI_APPIMAGE="/home/user/.local/bin/StalkerGammaGui.AppImage"
-GAMMAGUI_DIR="/home/user/.local/share/stalkergammagui"
-write_gammagui_desktop
-
-gg_desktop="$tmp/com.stalkergamma.gui.desktop"
-[[ -f "$gg_desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-gg_content="$(cat "$gg_desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$gg_content"
-check_contains "Exec points at the AppImage" "Exec=$GAMMAGUI_APPIMAGE" "$gg_content"
-check_contains "Icon uses an absolute path"  "Icon=$GAMMAGUI_DIR/icon.png" "$gg_content"
-check_contains "Type=Application" "Type=Application" "$gg_content"
-# The WM_CLASS comes from the .NET assembly name, matching the app's own AppDir
-# .desktop — a drift here brings back the duplicate-taskbar-icon problem.
-check_contains "StartupWMClass matches the Avalonia assembly" "StartupWMClass=StalkerGamma.Gui" "$gg_content"
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$gg_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
-    else
-        fail "passes desktop-file-validate" "$err"
-    fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
-fi
-
 # ── competing launcher pruning ────────────────────────────────────────────────
 # A launcher left behind by a manual install claims the same StartupWMClass as
 # ours, so KDE binds the running window to whichever it finds first. When it
@@ -1216,7 +682,7 @@ mkdir -p "$prune_dir"
 APPS_DIR="$prune_dir"
 GAMMAGUI_APPIMAGE="/home/user/.local/bin/StalkerGammaGui.AppImage"
 GAMMAGUI_DIR="/home/user/.local/share/stalkergammagui"
-write_gammagui_desktop
+write_app_desktop gammagui
 
 # what a manual install leaves behind: same window class, different Exec
 cat > "$prune_dir/stalker-gamma-gui.desktop" <<'EOF'
@@ -1254,7 +720,7 @@ prune_competing_launchers "com.stalkergamma.gui.desktop"
 prune_dry="$tmp/prune-dry"
 mkdir -p "$prune_dry"
 APPS_DIR="$prune_dry"
-write_gammagui_desktop
+write_app_desktop gammagui
 cp "$prune_dir/com.example.other.desktop" "$prune_dry/" 2>/dev/null
 cat > "$prune_dry/stalker-gamma-gui.desktop" <<'EOF'
 [Desktop Entry]
@@ -1313,7 +779,7 @@ mkdir -p "$prune_derive"
 APPS_DIR="$prune_derive"
 GAMMAGUI_APPIMAGE="/home/user/.local/bin/StalkerGammaGui.AppImage"
 GAMMAGUI_DIR="/home/user/.local/share/stalkergammagui"
-write_gammagui_desktop
+write_app_desktop gammagui
 printf '[Desktop Entry]\nStartupWMClass=StalkerGamma.Gui\n' > "$prune_derive/stray.desktop"
 DRY_RUN=0
 prune_competing_launchers "com.stalkergamma.gui.desktop" >/dev/null 2>&1
@@ -1354,31 +820,6 @@ else
     fail "a missing launcher returns 0 under set -e -o pipefail" \
          "prune aborts the run instead of pruning nothing"
 fi
-
-# A stray can sit beside a perfectly good launcher, so the prune cannot live in
-# the launcher-repair branch — that only fires when ours is missing or stale.
-# It has to run on the already-installed path too, or a re-run never fixes it.
-gg_skip_block="$(awk '/^install_gammagui\(\)/,/^}/' "$SCRIPT" \
-                 | awk '/already installed \(no self-updater/,/^        return$/')"
-if grep -q 'prune_competing_launchers' <<<"$gg_skip_block"; then
-    pass "the already-installed path still prunes strays"
-else
-    fail "the already-installed path still prunes strays" \
-         "a matching version stamp returns before any pruning happens"
-fi
-
-# Every app that writes a launcher prunes competitors for it, on both the
-# already-installed path and the install path — so a new app added later can't
-# quietly skip it.
-for app in streamhub consolevault discripper griddown gammagui lorerim wotlk musicai; do
-    app_block="$(awk "/^install_$app\\(\\)/,/^}/" "$SCRIPT")"
-    n="$(grep -c 'prune_competing_launchers' <<<"$app_block")"
-    if [[ "$n" -ge 2 ]]; then
-        pass "install_$app prunes competing launchers"
-    else
-        fail "install_$app prunes competing launchers" "only $n call(s) — expected the skip and install paths"
-    fi
-done
 
 # ── GitHub API access ─────────────────────────────────────────────────────────
 # Unauthenticated callers get 60 requests/hour per IP, and GitHub answers 403 —
@@ -1470,476 +911,499 @@ else
     fail "no release lookup bypasses the API helper" "$bypass"
 fi
 
-# GridDown may not have cut a release yet, so it alone treats 404 as "skip and
-# carry on". Routing it through the helper must not cost it that.
-gd_block="$(awk '/^install_griddown\(\)/,/^}/' "$SCRIPT")"
-if grep -q 'github_api_raw' <<<"$gd_block"; then
-    pass "GridDown fetches through the helper too"
-else
-    fail "GridDown fetches through the helper too" "it still calls curl directly"
-fi
-if grep -q '"404"' <<<"$gd_block"; then
-    pass "GridDown still skips gracefully when there is no release"
-else
-    fail "GridDown still skips gracefully when there is no release" "the 404 branch is gone"
-fi
+# ── prebuilt AppImages ────────────────────────────────────────────────────────
+# Eight apps share install_appimage(), so they are tested through it: a stubbed
+# release and download are pushed through the real install path (under the real
+# `set -euo pipefail`), and the verifiers are run against fixtures, rather than
+# grepping the source for the text of each app's own function.
+APPIMAGE_KEYS=(streamhub consolevault discripper griddown gammagui lorerim wotlk musicai)
 
-# ── LoreRim Autoinstall release-API parsing ───────────────────────────────────
-group "LoreRim Autoinstall release-API parsing"
-
-lr_release="$(github_api "https://api.github.com/repos/$LORERIM_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$lr_release" ]]; then
-    fail "fetched the latest release" "empty response (rate-limited? no release published yet?)"
-else
-    pass "fetched the latest release"
-
-    lr_tag="$(printf '%s' "$lr_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    lr_url="$(printf '%s' "$lr_release" | grep -o 'https://[^"]*/LorerimAutoinstall-x86_64\.AppImage"' | head -1 | tr -d '"')"
-
-    [[ "$lr_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($lr_tag)" \
-                                        || fail "tag parses as a version" "$lr_tag"
-    check_contains "asset URL ends in the AppImage name" "$LORERIM_ASSET" "$lr_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$lr_url"
-
-    # The stable asset name is load-bearing: a versioned name would break the
-    # installer's grep and every re-run's update path.
-    if [[ "$lr_url" =~ LorerimAutoinstall-[0-9] ]]; then
-        fail "asset name carries no version" "$lr_url"
-    else
-        pass "asset name carries no version (re-run updates keep working)"
-    fi
-
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$lr_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── LoreRim Autoinstall checksum verification ─────────────────────────────────
-group "LoreRim Autoinstall checksum verification"
-
-if grep -qF 'verify_lorerim "$tmp" "$digest" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-if awk '/^verify_lorerim\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable checksum aborts rather than warning"
-else
-    fail "an unverifiable checksum aborts rather than warning"
-fi
-
-# The API's per-asset digest is the only checksum this release publishes — prove
-# it's actually there and the right shape, using the installer's own extraction.
-# If GitHub ever drops or renames the field, the installer would refuse every
-# download, and this is where we'd find out.
-if [[ -n "$lr_release" ]]; then
-    lr_digest="$(printf '%s' "$lr_release" | LORERIM_ASSET="$LORERIM_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["LORERIM_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null)"
-    if [[ "$lr_digest" =~ ^[0-9a-f]{64}$ ]]; then
-        pass "releases API carries a sha256 digest for the asset"
-    else
-        fail "releases API carries a sha256 digest" "got: ${lr_digest:-nothing}"
-    fi
-
-    # Prove the digest matches the real asset — a mismatch here means either a
-    # bad release or a broken verify path, and both would refuse every install.
-    if [[ -n "${lr_url:-}" && "$lr_digest" =~ ^[0-9a-f]{64}$ ]]; then
-        lrd="$(mktemp -d)"
-        if curl -fsSL "$lr_url" -o "$lrd/app.AppImage" 2>/dev/null; then
-            lr_actual="$(sha256sum "$lrd/app.AppImage" | awk '{print $1}')"
-            check_eq "real release matches the API's sha256 digest" "$lr_digest" "$lr_actual"
-        else
-            printf '  %s·%s couldn'\''t download the release — skipping live checksum\n' "$DIM" "$RESET"
+# Stand-in for curl. Serves FAKE_BODY[<url suffix>] (the longest matching suffix
+# wins; the empty suffix is the default), writes to -o's target or stdout, logs
+# every URL asked for, and fails with curl's own 22 for anything unserved.
+declare -A FAKE_BODY=()
+fake_curl() {
+    local out="" url="" key best="" found=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o) out="$2"; shift 2 ;;
+            -*) shift ;;
+            *)  url="$1"; shift ;;
+        esac
+    done
+    [[ -z "${FAKE_CURL_LOG:-}" ]] || printf '%s\n' "$url" >> "$FAKE_CURL_LOG"
+    for key in "${!FAKE_BODY[@]}"; do
+        # "*" is the default body and loses to any real suffix that matches.
+        if [[ "$key" == "*" ]]; then
+            [[ $found -eq 1 ]] || { best="$key"; found=1; }
+        elif [[ "$url" == *"$key" && ( $found -eq 0 || "$best" == "*" || ${#key} -gt ${#best} ) ]]; then
+            best="$key"; found=1
         fi
-        rm -rf "$lrd"
-    fi
-fi
+    done
+    [[ $found -eq 1 ]] || return 22
+    if [[ -n "$out" ]]; then printf '%s' "${FAKE_BODY[$best]}" > "$out"; else printf '%s' "${FAKE_BODY[$best]}"; fi
+}
 
-# ── LoreRim Autoinstall .desktop file ─────────────────────────────────────────
-group "LoreRim Autoinstall .desktop file"
+# The asset each app publishes, and the neighbours a sloppy pattern would grab
+# instead. The decoys are listed FIRST, so `head -1` picking the wrong one shows.
+declare -A AI_ASSET=(
+    [streamhub]="StreamHub.AppImage"
+    [consolevault]="ConsoleVault_1.0.0_amd64.AppImage"
+    [discripper]="DiscRipper.AppImage"
+    [griddown]="GridDown_1.0.0_amd64.AppImage"
+    [gammagui]="$GAMMAGUI_ASSET"
+    [lorerim]="$LORERIM_ASSET"
+    [wotlk]="$WOTLK_ASSET"
+    [musicai]="Music.AI.Player_1.0.0_amd64.AppImage"
+)
+declare -A AI_DECOYS=(
+    [streamhub]="StreamHub.AppImage.zsync"
+    [consolevault]="ConsoleVault_1.0.0_amd64.AppImage.sig ConsoleVault_1.0.0_amd64.deb"
+    [discripper]="DiscRipper.AppImage.zsync"
+    [griddown]="GridDown_1.0.0_amd64.AppImage.sig"
+    [gammagui]="$GAMMAGUI_ASSET.zsync"
+    [lorerim]="$LORERIM_ASSET.zsync"
+    [wotlk]="$WOTLK_ASSET.zsync"
+    [musicai]="Music.AI.Player_1.0.0_amd64.deb Music.AI.Player_1.0.0_amd64.deb.sig Music.AI.Player_1.0.0_amd64.AppImage.sig"
+)
 
-APPS_DIR="$tmp"
-LORERIM_APPIMAGE="/home/user/.local/bin/LorerimAutoinstall.AppImage"
-LORERIM_DIR="/home/user/.local/share/lorerim-autoinstall"
-write_lorerim_desktop
+PAYLOAD="the payload"
+PAYLOAD_SHA="$(printf '%s' "$PAYLOAD" | sha256sum | awk '{print $1}')"
+OTHER_SHA="$(printf 'something else' | sha256sum | awk '{print $1}')"
 
-lr_desktop="$tmp/com.lorerim.autoinstall.desktop"
-[[ -f "$lr_desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-lr_content="$(cat "$lr_desktop" 2>/dev/null || true)"
+# appimg_json KEY DIGEST > release.json — the API's view of a release.
+appimg_json() {
+    local key="$1" digest="$2" decoys="${AI_DECOYS[$1]}"
+    python - "$key" "${AI_ASSET[$key]}" "$digest" "$decoys" "$WOTLK_SUMS" <<'PY'
+import json, sys
+key, asset, digest, decoys, sums = sys.argv[1:6]
+names = decoys.split() + [asset] + ([sums] if key == 'wotlk' else [])
+def entry(n):
+    e = {'name': n, 'browser_download_url': 'https://example.invalid/download/v1.0.0/' + n}
+    if n == asset and digest:
+        e['digest'] = 'sha256:' + digest
+    return e
+print(json.dumps({'tag_name': 'v1.0.0', 'assets': [entry(n) for n in names]}, indent=2))
+PY
+}
 
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$lr_content"
-check_contains "Exec points at the AppImage" "Exec=$LORERIM_APPIMAGE" "$lr_content"
-check_contains "Icon uses an absolute path"  "Icon=$LORERIM_DIR/icon.png" "$lr_content"
-check_contains "Type=Application" "Type=Application" "$lr_content"
-# The WM_CLASS comes from the .NET assembly name, matching the app's own AppDir
-# .desktop — a drift here brings back the duplicate-taskbar-icon problem.
-check_contains "StartupWMClass matches the Avalonia assembly" "StartupWMClass=Lorerim.Gui" "$lr_content"
-# The app's own .desktop registers the jackify: URL scheme (Nexus download
-# links); dropping it here would silently break click-to-download.
-check_contains "registers the jackify: scheme handler" "MimeType=x-scheme-handler/jackify;" "$lr_content"
-check_contains "Exec takes the URL argument (%u)" "%u" "$lr_content"
+# appimg_install KEY CASE_DIR — run install_appimage for KEY in a subshell under
+# the script's real flags, against the fixture in CASE_DIR. Knobs, as env:
+#   AI_HTTP        status the release lookup returns (default 200)
+#   AI_VERIFY_RC   replace the verifier with one returning this; unset = the real one
+appimg_install() {
+    local key="$1" c="$2"
+    (   set -euo pipefail
+        local upper="${key^^}"
+        DRY_RUN=0; APPS_DIR="$c/apps"; BIN_DIR="$c/bin"
+        printf -v "${upper}_DIR" '%s' "$c/data"
+        printf -v "${upper}_APPIMAGE" '%s' "$c/bin/app.AppImage"
+        FAKE_CURL_LOG="$c/curl.log"
+        github_api_raw() { cat "$c/release.json"; printf '\n%s' "${AI_HTTP:-200}"; }
+        curl() { fake_curl "$@"; }
+        refresh_desktop_db() { :; }
+        if [[ -n "${AI_VERIFY_RC:-}" ]]; then appimage_verify() { return "$AI_VERIFY_RC"; }; fi
+        install_appimage "$key"
+    )
+}
 
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$lr_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
+group "Prebuilt AppImages: install flow (all apps)"
+
+# Every app must have a spec, a wrapper, a step in main() and a --only name.
+for app in "${APPIMAGE_KEYS[@]}"; do
+    ( appimage_load "$app" ) >/dev/null 2>&1 && pass "$app has an AppImage spec" || fail "$app has an AppImage spec"
+    [[ "$(type -t "install_$app")" == function ]] && pass "install_$app exists" || fail "install_$app exists"
+    grep -qE "wanted $app +&& +install_$app" "$SCRIPT" && pass "$app runs from main()" || fail "$app runs from main()"
+done
+
+for app in "${APPIMAGE_KEYS[@]}"; do
+    c="$tmp/ai-$app"; mkdir -p "$c"
+    digest=""; case "$app" in gammagui|lorerim|wotlk) digest="$PAYLOAD_SHA" ;; esac
+    appimg_json "$app" "$digest" > "$c/release.json"
+    FAKE_BODY=( ["*"]="$PAYLOAD" )
+    [[ "$app" == wotlk ]] && FAKE_BODY["/download/v1.0.0/$WOTLK_SUMS"]="$PAYLOAD_SHA  $WOTLK_ASSET"$'\n'
+    stub_verify=""; case "$app" in streamhub|consolevault|discripper|griddown|musicai) stub_verify=0 ;; esac
+
+    # 1. A fresh install ends with a runnable, stamped, launchable app.
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"; rc=$?
+    check_eq "$app: fresh install succeeds" 0 "$rc"
+    [[ -x "$c/bin/app.AppImage" ]] && pass "$app: AppImage is installed and executable" \
+        || fail "$app: AppImage is installed and executable" "$out"
+    check_eq "$app: version stamp records the tag" "v1.0.0" "$(cat "$c/data/.version" 2>/dev/null)"
+    [[ -f "$c/data/icon.png" ]] && pass "$app: icon is fetched" || fail "$app: icon is fetched"
+    appimage_load "$app"
+    [[ -f "$c/apps/$APP_DESKTOP" ]] && pass "$app: launcher is written" || fail "$app: launcher is written"
+    [[ ! -e "$c/bin/app.AppImage.partial" ]] && pass "$app: no .partial left behind" || fail "$app: no .partial left behind"
+    # The pattern must pick the AppImage out of its .sig/.zsync/.deb neighbours.
+    want_url="https://example.invalid/download/v1.0.0/${AI_ASSET[$app]}"
+    if grep -qxF "$want_url" "$c/curl.log"; then pass "$app: downloads the AppImage, not a lookalike asset"
+    else fail "$app: downloads the AppImage, not a lookalike asset" "asked for: $(tr '\n' ' ' < "$c/curl.log")"; fi
+
+    # 2. Same tag again: nothing is downloaded, and it still exits 0.
+    : > "$c/curl.log"
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"; rc=$?
+    check_eq "$app: re-run at the same version succeeds" 0 "$rc"
+    check_contains "$app: re-run says it is already installed" "already installed" "$out"
+    if grep -qF "${AI_ASSET[$app]}" "$c/curl.log"; then fail "$app: re-run downloads nothing" "$(cat "$c/curl.log")"
+    else pass "$app: re-run downloads nothing"; fi
+
+    # 3. The stamp must not strand a deleted or stale launcher.
+    rm -f "$c/apps/$APP_DESKTOP"
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"
+    [[ -f "$c/apps/$APP_DESKTOP" ]] && pass "$app: a deleted launcher is recreated on re-run" \
+        || fail "$app: a deleted launcher is recreated on re-run" "$out"
+    sed -i 's/^StartupWMClass=.*/StartupWMClass=Stale.Class/' "$c/apps/$APP_DESKTOP"
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"
+    grep -qxF "StartupWMClass=$APP_WMCLASS" "$c/apps/$APP_DESKTOP" \
+        && pass "$app: a launcher with a stale window class is rewritten" \
+        || fail "$app: a launcher with a stale window class is rewritten" "$out"
+
+    # 4. A stray claiming our window class goes, on the already-installed path.
+    printf '[Desktop Entry]\nName=Stray\nStartupWMClass=%s\n' "$APP_WMCLASS" > "$c/apps/stray.desktop"
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"
+    [[ ! -e "$c/apps/stray.desktop" && -f "$c/apps/$APP_DESKTOP" ]] \
+        && pass "$app: a competing launcher is pruned when already installed" \
+        || fail "$app: a competing launcher is pruned when already installed" "$out"
+
+    # 5. ...and on a fresh install.
+    c2="$tmp/ai-$app-fresh"; mkdir -p "$c2/apps"; cp "$c/release.json" "$c2/release.json"
+    printf '[Desktop Entry]\nName=Stray\nStartupWMClass=%s\n' "$APP_WMCLASS" > "$c2/apps/stray.desktop"
+    out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c2" 2>&1)"
+    [[ ! -e "$c2/apps/stray.desktop" ]] && pass "$app: a competing launcher is pruned on a fresh install" \
+        || fail "$app: a competing launcher is pruned on a fresh install" "$out"
+
+    # 6. An unverifiable download is refused: nothing executable, stamped or
+    #    launchable is left, and the failure is stated.
+    c3="$tmp/ai-$app-bad"; mkdir -p "$c3"
+    bad_digest=""; [[ -n "$digest" ]] && bad_digest="$OTHER_SHA"
+    appimg_json "$app" "$bad_digest" > "$c3/release.json"
+    if [[ -n "$stub_verify" ]]; then bad_rc=1; else bad_rc=""; fi
+    if [[ "$app" == wotlk ]]; then FAKE_BODY["/download/v1.0.0/$WOTLK_SUMS"]="$OTHER_SHA  $WOTLK_ASSET"$'\n'; fi
+    out="$(AI_VERIFY_RC="$bad_rc" appimg_install "$app" "$c3" 2>&1)"; rc=$?
+    [[ $rc -ne 0 ]] && pass "$app: a failed verification aborts the install" \
+        || fail "$app: a failed verification aborts the install" "exit 0: $out"
+    check_contains "$app: the refusal is stated" "could not be verified" "$out"
+    if [[ ! -e "$c3/bin/app.AppImage" && ! -e "$c3/bin/app.AppImage.partial" \
+       && ! -e "$c3/data/.version" && ! -e "$c3/apps/$APP_DESKTOP" ]]; then
+        pass "$app: a failed verification leaves nothing installed"
     else
-        fail "passes desktop-file-validate" "$err"
+        fail "$app: a failed verification leaves nothing installed" "$(find "$c3" -type f | tr '\n' ' ')"
     fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
-fi
 
-# ── WotLK Autoinstall release-API parsing ─────────────────────────────────────
-group "WotLK Autoinstall release-API parsing"
+    # 7. A release with the asset missing says so (set -e + pipefail must not
+    #    swallow the message), and a 404 is only forgiven where it is meant to be.
+    c4="$tmp/ai-$app-noasset"; mkdir -p "$c4"
+    printf '{"tag_name":"v1.0.0","assets":[]}\n' > "$c4/release.json"
+    out="$(appimg_install "$app" "$c4" 2>&1)"; rc=$?
+    [[ $rc -ne 0 ]] && pass "$app: a release without the asset fails" || fail "$app: a release without the asset fails" "$out"
+    check_contains "$app: the missing asset is named, not silently exited on" "AppImage asset in release v1.0.0" "$out"
 
-wk_release="$(github_api "https://api.github.com/repos/$WOTLK_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$wk_release" ]]; then
-    fail "fetched the latest release" "empty response (rate-limited? no release published yet?)"
-else
-    pass "fetched the latest release"
-
-    wk_tag="$(printf '%s' "$wk_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    wk_url="$(printf '%s' "$wk_release" | grep -o 'https://[^"]*/WowWotlkAutoinstall-x86_64\.AppImage"' | head -1 | tr -d '"')"
-    wk_sums_url="$(printf '%s' "$wk_release" | grep -o "https://[^\"]*/download/[^\"]*/$WOTLK_SUMS\"" | head -1 | tr -d '"')"
-
-    [[ "$wk_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($wk_tag)" \
-                                        || fail "tag parses as a version" "$wk_tag"
-    check_contains "asset URL ends in the AppImage name" "$WOTLK_ASSET" "$wk_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$wk_url"
-
-    # The stable asset name is load-bearing: a versioned name would break the
-    # installer's grep and every re-run's update path.
-    if [[ "$wk_url" =~ WowWotlkAutoinstall-[0-9] ]]; then
-        fail "asset name carries no version" "$wk_url"
+    printf '{"message":"Not Found"}\n' > "$c4/release.json"
+    out="$(AI_HTTP=404 appimg_install "$app" "$c4" 2>&1)"; rc=$?
+    if [[ "$app" == griddown ]]; then
+        check_eq "griddown: no published release is skipped, not fatal" 0 "$rc"
+        check_contains "griddown: the skip is explained" "no published release yet" "$out"
     else
-        pass "asset name carries no version (re-run updates keep working)"
+        [[ $rc -ne 0 ]] && pass "$app: a 404 is fatal" || fail "$app: a 404 is fatal" "$out"
     fi
+done
 
-    # The whole verify path hangs off this asset still being published.
-    check_contains "release publishes a $WOTLK_SUMS asset" "/$WOTLK_SUMS" "$wk_sums_url"
+# A 200 whose asset exists must still die when the app is the 404-forgiving one:
+# the skip may not become "ignore every failure".
+c="$tmp/ai-griddown-403"; mkdir -p "$c"
+printf '{"message":"API rate limit exceeded"}\n' > "$c/release.json"
+out="$(AI_HTTP=403 appimg_install griddown "$c" 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && pass "griddown: only a 404 is forgiven" || fail "griddown: only a 404 is forgiven" "$out"
+check_contains "a refused lookup is diagnosed, not just failed" "rate limit" "$out"
 
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$wk_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
+# --dry-run through the same path touches nothing and downloads nothing.
+c="$tmp/ai-dry"; mkdir -p "$c"; appimg_json streamhub "" > "$c/release.json"
+dry_out="$( set -euo pipefail
+            DRY_RUN=1; APPS_DIR="$c/apps"; BIN_DIR="$c/bin"
+            STREAMHUB_DIR="$c/data"; STREAMHUB_APPIMAGE="$c/bin/app.AppImage"
+            github_api_raw() { cat "$c/release.json"; printf '\n200'; }
+            curl() { touch "$c/UNEXPECTED_DOWNLOAD"; return 99; }
+            install_appimage streamhub 2>&1 )"; rc=$?
+check_eq "dry-run through install_appimage succeeds" 0 "$rc"
+check_contains "dry-run shows the verification it would do" "[dry-run] verify sha512" "$dry_out"
+check_eq "dry-run through install_appimage writes nothing" "" "$(find "$c" -type f ! -name release.json)"
 
-# ── WotLK Autoinstall checksum verification ───────────────────────────────────
-group "WotLK Autoinstall checksum verification"
+group "Prebuilt AppImages: release parsing"
 
-if grep -qF 'verify_wotlk "$tmp" "$sums_url" "$digest" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
+REL='{"tag_name":"v2.3.4","assets":[
+ {"name":"A.AppImage.sig","browser_download_url":"https://h/download/v2.3.4/A_amd64.AppImage.sig","digest":"sha256:aaaa"},
+ {"name":"A_amd64.AppImage","browser_download_url":"https://h/download/v2.3.4/A_amd64.AppImage","digest":"sha256:'"$PAYLOAD_SHA"'"},
+ {"name":"SHA256SUMS","browser_download_url":"https://h/download/v2.3.4/SHA256SUMS"}]}'
+check_eq "release_tag reads the tag" "v2.3.4" "$(release_tag "$REL")"
+check_eq "release_asset_url skips the .sig for the AppImage" "https://h/download/v2.3.4/A_amd64.AppImage" \
+    "$(release_asset_url "$REL" '_amd64\.AppImage')"
+check_eq "release_asset_url finds the checksum file" "https://h/download/v2.3.4/SHA256SUMS" \
+    "$(release_asset_url "$REL" '/download/[^"]*/SHA256SUMS')"
+check_eq "release_asset_digest matches by asset name" "$PAYLOAD_SHA" "$(release_asset_digest "$REL" "A_amd64.AppImage")"
+check_eq "release_asset_digest is empty for an asset with none" "" "$(release_asset_digest "$REL" "SHA256SUMS")"
+check_eq "release_asset_digest is empty for an unknown asset" "" "$(release_asset_digest "$REL" "nope")"
+# Under the script's real flags a no-match is an empty string, never an exit.
+nomatch="$( set -euo pipefail; release_tag '{}'; release_asset_url '{}' 'x'; release_asset_digest 'not json' 'x'; echo reached )"
+check_eq "a no-match in any parser does not abort under set -e -o pipefail" "reached" "$nomatch"
+
+group "Prebuilt AppImages: verifiers"
+
+vd="$tmp/verify"; mkdir -p "$vd"
+printf '%s' "$PAYLOAD" > "$vd/app"
+curl() { fake_curl "$@"; }
+
+# minisign: a throwaway keypair stands in for the app's real one.
+if have minisign; then
+    minisign -G -W -f -p "$vd/k.pub" -s "$vd/k.sec" >/dev/null 2>&1
+    minisign -G -W -f -p "$vd/o.pub" -s "$vd/o.sec" >/dev/null 2>&1
+    minisign -S -s "$vd/k.sec" -m "$vd/app" -x "$vd/app.minisig" >/dev/null 2>&1
+    kpub="$(sed -n 2p "$vd/k.pub")"; opub="$(sed -n 2p "$vd/o.pub")"
+    FAKE_BODY=( [".sig"]="$(base64 -w0 "$vd/app.minisig")" )
+    verify_minisign "$vd/app" https://h/app.AppImage "$kpub" >/dev/null 2>&1 \
+        && pass "minisign: a correctly signed file verifies" || fail "minisign: a correctly signed file verifies"
+    printf 'tampered' > "$vd/bad"
+    verify_minisign "$vd/bad" https://h/app.AppImage "$kpub" >/dev/null 2>&1 \
+        && fail "minisign: a tampered file is refused" || pass "minisign: a tampered file is refused"
+    verify_minisign "$vd/app" https://h/app.AppImage "$opub" >/dev/null 2>&1 \
+        && fail "minisign: a signature from another key is refused" || pass "minisign: a signature from another key is refused"
+    FAKE_BODY=()
+    verify_minisign "$vd/app" https://h/app.AppImage "$kpub" >/dev/null 2>&1 \
+        && fail "minisign: an unfetchable signature is refused" || pass "minisign: an unfetchable signature is refused"
+    FAKE_BODY=( [".sig"]="" )
+    verify_minisign "$vd/app" https://h/app.AppImage "$kpub" >/dev/null 2>&1 \
+        && fail "minisign: an empty signature is refused" || pass "minisign: an empty signature is refused"
+    [[ ! -e "$vd/app.minisig" ]] && pass "minisign: the decoded signature is cleaned up" || fail "minisign: the decoded signature is cleaned up"
 else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
+    printf '  %s·%s minisign not installed — skipping the signature fixtures\n' "$DIM" "$RESET"
 fi
 
-if awk '/^verify_wotlk\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable checksum aborts rather than warning"
+# The keys are compiled in, never fetched from the release they vouch for.
+if awk '/^verify_minisign\(\)/,/^}/' "$SCRIPT" | grep -qi 'pubkey.*curl\|curl.*pubkey\|tauri.conf'; then
+    fail "the minisign public key is embedded, not fetched at runtime"
 else
-    fail "an unverifiable checksum aborts rather than warning"
+    pass "the minisign public key is embedded, not fetched at runtime"
 fi
 
-# verify_wotlk exercised for real against local SHA256SUMS files served over
-# file:// — the parsing rules below are the ones that decide whether a bad
-# download gets chmod'd, so they're tested by behaviour, not by grepping source.
+# StreamHub: base64 sha512 from latest-linux.yml.
+sh512="$(python -c 'import base64,hashlib,sys;print(base64.b64encode(hashlib.sha512(sys.argv[1].encode()).digest()).decode())' "$PAYLOAD")"
+FAKE_BODY=( ["latest-linux.yml"]=$'version: 1\nsha512: '"$sh512"$'\n' )
+verify_streamhub "$vd/app" v1 >/dev/null 2>&1 && pass "StreamHub: a matching sha512 verifies" || fail "StreamHub: a matching sha512 verifies"
+FAKE_BODY=( ["latest-linux.yml"]=$'sha512: AAAA\n' )
+verify_streamhub "$vd/app" v1 >/dev/null 2>&1 && fail "StreamHub: a mismatched sha512 is refused" || pass "StreamHub: a mismatched sha512 is refused"
+FAKE_BODY=( ["latest-linux.yml"]=$'version: 1\n' )
+verify_streamhub "$vd/app" v1 >/dev/null 2>&1 && fail "StreamHub: a yml with no sha512 is refused" || pass "StreamHub: a yml with no sha512 is refused"
+FAKE_BODY=()
+verify_streamhub "$vd/app" v1 >/dev/null 2>&1 && fail "StreamHub: an unfetchable yml is refused" || pass "StreamHub: an unfetchable yml is refused"
+
+# Disc Ripper: SHA-1 and length from the .zsync header.
+dsha="$(sha1sum "$vd/app" | awk '{print $1}')"; dlen="$(stat -c%s "$vd/app")"
+FAKE_BODY=( [".zsync"]=$'zsync: 0.6.2\nSHA-1: '"$dsha"$'\nLength: '"$dlen"$'\n\nBINARY' )
+verify_discripper "$vd/app" v1 >/dev/null 2>&1 && pass "Disc Ripper: a matching sha1 and length verify" || fail "Disc Ripper: a matching sha1 and length verify"
+FAKE_BODY=( [".zsync"]=$'SHA-1: '"$dsha"$'\nLength: 999\n\nBINARY' )
+verify_discripper "$vd/app" v1 >/dev/null 2>&1 && fail "Disc Ripper: a wrong length is refused" || pass "Disc Ripper: a wrong length is refused"
+FAKE_BODY=( [".zsync"]=$'SHA-1: 0000\nLength: '"$dlen"$'\n\nBINARY' )
+verify_discripper "$vd/app" v1 >/dev/null 2>&1 && fail "Disc Ripper: a wrong sha1 is refused" || pass "Disc Ripper: a wrong sha1 is refused"
+FAKE_BODY=( [".zsync"]=$'zsync: 0.6.2\n\nBINARY' )
+verify_discripper "$vd/app" v1 >/dev/null 2>&1 && fail "Disc Ripper: a header with no sha1 is refused" || pass "Disc Ripper: a header with no sha1 is refused"
+FAKE_BODY=()
+verify_discripper "$vd/app" v1 >/dev/null 2>&1 && fail "Disc Ripper: an unfetchable .zsync is refused" || pass "Disc Ripper: an unfetchable .zsync is refused"
+
+# GAMMA GUI / LoreRim: the API digest.
+verify_sha256_digest "$vd/app" "$PAYLOAD_SHA" >/dev/null 2>&1 && pass "sha256 digest: a match verifies" || fail "sha256 digest: a match verifies"
+verify_sha256_digest "$vd/app" "$OTHER_SHA" >/dev/null 2>&1 && fail "sha256 digest: a mismatch is refused" || pass "sha256 digest: a mismatch is refused"
+verify_sha256_digest "$vd/app" "" >/dev/null 2>&1 && fail "sha256 digest: no digest is refused" || pass "sha256 digest: no digest is refused"
+
+# WotLK: SHA256SUMS, exercised for real against local files over file:// — the
+# parsing rules below decide whether a bad download gets chmod'd.
+unset -f curl
 wkv="$tmp/wotlk-verify"; mkdir -p "$wkv"
 printf 'the payload\n' > "$wkv/app.AppImage"
 wk_real="$(sha256sum "$wkv/app.AppImage" | awk '{print $1}')"
 wk_other="$(printf 'something else\n' | sha256sum | awk '{print $1}')"
+wk_verify() { verify_sha256sums "$wkv/app.AppImage" "$1" "$2" "$WOTLK_ASSET" "$WOTLK_SUMS" >/dev/null 2>&1; }
 
 printf '%s  %s\n' "$wk_real" "$WOTLK_ASSET" > "$wkv/good.sums"
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/good.sums" "" >/dev/null 2>&1; then
-    pass "a matching sha256 verifies"
-else
-    fail "a matching sha256 verifies" "a good download was refused"
-fi
+wk_verify "file://$wkv/good.sums" "" && pass "a matching sha256 verifies" || fail "a matching sha256 verifies" "a good download was refused"
 
 printf '%s  %s\n' "$wk_other" "$WOTLK_ASSET" > "$wkv/bad.sums"
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/bad.sums" "" >/dev/null 2>&1; then
-    fail "a mismatched sha256 is refused" "a corrupt download would be chmod'd and run"
-else
-    pass "a mismatched sha256 is refused"
-fi
+wk_verify "file://$wkv/bad.sums" "" && fail "a mismatched sha256 is refused" "a corrupt download would be chmod'd and run" \
+    || pass "a mismatched sha256 is refused"
 
-# A second binary in the release must not be able to stand in for ours: the
-# line is picked by asset name, not by being first in the file.
+# A second binary in the release must not stand in for ours: the line is picked
+# by asset name, not by being first in the file.
 { printf '%s  SomeOtherThing.AppImage\n' "$wk_other"
   printf '%s  %s\n' "$wk_real" "$WOTLK_ASSET"; } > "$wkv/multi.sums"
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/multi.sums" "" >/dev/null 2>&1; then
-    pass "the sha256 is matched to our asset by name, not by position"
-else
-    fail "the sha256 is matched to our asset by name" "it read the first line instead of ours"
-fi
+wk_verify "file://$wkv/multi.sums" "" && pass "the sha256 is matched to our asset by name, not by position" \
+    || fail "the sha256 is matched to our asset by name" "it read the first line instead of ours"
 
 # No line for our asset at all is "couldn't check", which must fail closed.
 printf '%s  SomeOtherThing.AppImage\n' "$wk_other" > "$wkv/absent.sums"
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/absent.sums" "" >/dev/null 2>&1; then
-    fail "a SHA256SUMS with no line for our asset is refused" "couldn't-check was treated as passed"
-else
-    pass "a SHA256SUMS with no line for our asset is refused"
-fi
+wk_verify "file://$wkv/absent.sums" "" && fail "a SHA256SUMS with no line for our asset is refused" "couldn't-check was treated as passed" \
+    || pass "a SHA256SUMS with no line for our asset is refused"
 
-# Same for a missing SHA256SUMS asset and an unfetchable one.
-if verify_wotlk "$wkv/app.AppImage" "" "$wk_real" >/dev/null 2>&1; then
-    fail "a missing $WOTLK_SUMS asset is refused" "couldn't-check was treated as passed"
-else
-    pass "a missing $WOTLK_SUMS asset is refused"
-fi
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/nope.sums" "" >/dev/null 2>&1; then
-    fail "an unfetchable $WOTLK_SUMS is refused" "couldn't-check was treated as passed"
-else
-    pass "an unfetchable $WOTLK_SUMS is refused"
-fi
+wk_verify "" "$wk_real" && fail "a missing $WOTLK_SUMS asset is refused" "couldn't-check was treated as passed" \
+    || pass "a missing $WOTLK_SUMS asset is refused"
+wk_verify "file://$wkv/nope.sums" "" && fail "an unfetchable $WOTLK_SUMS is refused" "couldn't-check was treated as passed" \
+    || pass "an unfetchable $WOTLK_SUMS is refused"
 
-# SHA256SUMS says one thing, the releases API another — that's an asset nobody
-# re-hashed, and it fails rather than picking a winner.
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/good.sums" "$wk_other" >/dev/null 2>&1; then
-    fail "a SHA256SUMS/API digest disagreement is refused" "one record silently overrode the other"
-else
-    pass "a SHA256SUMS/API digest disagreement is refused"
-fi
+# SHA256SUMS says one thing, the releases API another — an asset nobody
+# re-hashed. It fails rather than picking a winner.
+wk_verify "file://$wkv/good.sums" "$wk_other" && fail "a SHA256SUMS/API digest disagreement is refused" "one record silently overrode the other" \
+    || pass "a SHA256SUMS/API digest disagreement is refused"
 
 # sha256sum's binary-mode marker ('*name') is still our asset's line.
 printf '%s *%s\n' "$wk_real" "$WOTLK_ASSET" > "$wkv/binmode.sums"
-if verify_wotlk "$wkv/app.AppImage" "file://$wkv/binmode.sums" "" >/dev/null 2>&1; then
-    pass "a binary-mode ('*name') SHA256SUMS line is understood"
-else
-    fail "a binary-mode ('*name') SHA256SUMS line is understood" "a valid release would be refused"
-fi
+wk_verify "file://$wkv/binmode.sums" "" && pass "a binary-mode ('*name') SHA256SUMS line is understood" \
+    || fail "a binary-mode ('*name') SHA256SUMS line is understood" "a valid release would be refused"
 
-# And the real release must pass all of it — a failure here means either a bad
-# release or a broken verify path, and both would refuse every install.
-if [[ -n "${wk_url:-}" && -n "${wk_sums_url:-}" ]]; then
-    wkd="$(mktemp -d)"
-    if curl -fsSL "$wk_url" -o "$wkd/app.AppImage" 2>/dev/null; then
-        wk_api_digest="$(printf '%s' "$wk_release" | WOTLK_ASSET="$WOTLK_ASSET" python -c '
-import json, os, sys
-for a in json.load(sys.stdin).get("assets", []):
-    if a.get("name") == os.environ["WOTLK_ASSET"]:
-        d = a.get("digest") or ""
-        if d.startswith("sha256:"):
-            print(d[len("sha256:"):])
-        break
-' 2>/dev/null)"
-        if verify_wotlk "$wkd/app.AppImage" "$wk_sums_url" "$wk_api_digest" >/dev/null 2>&1; then
-            pass "the real release verifies against its own $WOTLK_SUMS"
-        else
-            fail "the real release verifies against its own $WOTLK_SUMS" \
-                 "the published binary does not match the published checksum"
-        fi
-    else
-        printf '  %s·%s couldn'\''t download the release — skipping live checksum\n' "$DIM" "$RESET"
+group "Prebuilt AppImages: launchers"
+
+lc="$tmp/launchers"; mkdir -p "$lc"
+declare -A AI_EXPECT_WM=(
+    [streamhub]="StreamHub" [consolevault]="ConsoleVault" [discripper]="discripper" [griddown]="griddown"
+    [gammagui]="StalkerGamma.Gui" [lorerim]="Lorerim.Gui" [wotlk]="WowWotlk.Gui" [musicai]="music-ai-player"
+)
+for app in "${APPIMAGE_KEYS[@]}"; do
+    upper="${app^^}"
+    ( APPS_DIR="$lc"
+      printf -v "${upper}_APPIMAGE" '%s' "/home/user/.local/bin/$app.AppImage"
+      printf -v "${upper}_DIR" '%s' "/home/user/.local/share/$app"
+      write_app_desktop "$app" )
+    appimage_load "$app"
+    f="$lc/$APP_DESKTOP"
+    content="$(cat "$f" 2>/dev/null || true)"
+    [[ -f "$f" ]] && pass "$app: .desktop file is written" || fail "$app: .desktop file is written"
+    check_contains "$app: has [Desktop Entry] header" "[Desktop Entry]" "$content"
+    check_contains "$app: Type=Application" "Type=Application" "$content"
+    check_contains "$app: Exec points at the AppImage" "Exec=/home/user/.local/bin/$app.AppImage" "$content"
+    check_contains "$app: Icon uses an absolute path" "Icon=/home/user/.local/share/$app/icon.png" "$content"
+    # A drift here brings back the duplicate-taskbar-icon problem.
+    check_contains "$app: StartupWMClass is the window's class" "StartupWMClass=${AI_EXPECT_WM[$app]}" "$content"
+    if have desktop-file-validate; then
+        if err="$(desktop-file-validate "$f" 2>&1)"; then pass "$app: passes desktop-file-validate"
+        else fail "$app: passes desktop-file-validate" "$err"; fi
     fi
-    rm -rf "$wkd"
-fi
-
-# ── WotLK Autoinstall .desktop file ───────────────────────────────────────────
-group "WotLK Autoinstall .desktop file"
-
-APPS_DIR="$tmp"
-WOTLK_APPIMAGE="/home/user/.local/bin/WowWotlkAutoinstall.AppImage"
-WOTLK_DIR="/home/user/.local/share/wow-wotlk-autoinstall"
-write_wotlk_desktop
-
-wk_desktop="$tmp/com.wowwotlk.autoinstall.desktop"
-[[ -f "$wk_desktop" ]] && pass ".desktop file is written" || fail ".desktop file is written"
-wk_content="$(cat "$wk_desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$wk_content"
-check_contains "Exec points at the AppImage" "Exec=$WOTLK_APPIMAGE" "$wk_content"
-check_contains "Icon uses an absolute path"  "Icon=$WOTLK_DIR/icon.png" "$wk_content"
-check_contains "Type=Application" "Type=Application" "$wk_content"
-# The WM_CLASS comes from the .NET assembly name, matching the app's own AppDir
-# .desktop — a drift here brings back the duplicate-taskbar-icon problem.
-check_contains "StartupWMClass matches the Avalonia assembly" "StartupWMClass=WowWotlk.Gui" "$wk_content"
-# Unlike LoreRim this app registers no URL scheme, so a %u would be handed to an
-# Exec that ignores it. Assert it stays off rather than getting copy-pasted in.
-if grep -q '%u' <<<"$wk_content"; then
-    fail "Exec takes no URL argument" "a %u was added for an app that handles no scheme"
-else
-    pass "Exec takes no URL argument (this app registers no scheme)"
-fi
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$wk_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
+    # The name pinned in taskbar.txt has to be the name actually written, or the
+    # taskbar step skips the tile with a warning.
+    if grep -qxF "$APP_DESKTOP" <(read_list "$REPO_ROOT/packages/taskbar.txt"); then
+        pass "$app: taskbar.txt pins the launcher that gets written"
     else
-        fail "passes desktop-file-validate" "$err"
+        fail "$app: taskbar.txt pins the launcher that gets written" "$APP_DESKTOP is not pinned"
     fi
+done
+# LoreRim registers the jackify: scheme (Nexus download links); dropping it
+# silently breaks click-to-download. WotLK registers none, so a %u would be noise.
+check_contains "lorerim: registers the jackify: scheme handler" "MimeType=x-scheme-handler/jackify;" "$(cat "$lc/com.lorerim.autoinstall.desktop")"
+check_contains "lorerim: Exec takes the URL argument (%u)" "%u" "$(cat "$lc/com.lorerim.autoinstall.desktop")"
+if grep -q '%u\|MimeType' "$lc/com.wowwotlk.autoinstall.desktop"; then
+    fail "wotlk: Exec takes no URL argument" "a scheme handler was added for an app that registers none"
 else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
+    pass "wotlk: Exec takes no URL argument (this app registers no scheme)"
 fi
+# musicai's file NAME is part of the contract: on Wayland the compositor matches
+# the window to a .desktop named for its app-id (the Tauri crate name).
+[[ -f "$lc/music-ai-player.desktop" ]] && pass "musicai: named for the Wayland app-id" || fail "musicai: named for the Wayland app-id"
 
-# ── Music AI Player release-API parsing ───────────────────────────────────────
-group "Music AI Player release-API parsing"
+# Each app installs before the config step pins the taskbar, or the pin is
+# skipped with a warning for a launcher that doesn't exist yet.
+cfg_line="$(grep -n -m1 'wanted config' "$SCRIPT" | cut -d: -f1)"
+for app in "${APPIMAGE_KEYS[@]}"; do
+    l="$(grep -n -m1 "wanted $app " "$SCRIPT" | cut -d: -f1)"
+    if [[ -n "$l" && -n "$cfg_line" && "$l" -lt "$cfg_line" ]]; then pass "$app installs before the config step"
+    else fail "$app installs before the config step" "$app=$l config=$cfg_line"; fi
+done
 
-# Run against a HOME that has an applications dir but none of our launchers —
-# the state of any box that has run this script before but not yet installed
-# this app. Doing it under the tester's real HOME would pass or fail depending
-# on whether they happen to have the app already, which is not a test.
+# --only musicai is accepted on a box without it. Run against a HOME that has an
+# applications dir but none of our launchers: under the tester's real HOME this
+# would pass or fail on whether they happen to have the app already.
 ma_home="$tmp/musicai-home"; mkdir -p "$ma_home/.local/share/applications"
-printf '[Desktop Entry]\nName=Unrelated\nExec=/usr/bin/true\n' \
-    > "$ma_home/.local/share/applications/unrelated.desktop"
-out="$(HOME="$ma_home" bash "$SCRIPT" --only musicai --dry-run 2>&1)"; rc=$?
+printf '[Desktop Entry]\nName=Unrelated\nExec=/usr/bin/true\n' > "$ma_home/.local/share/applications/unrelated.desktop"
+out="$(HOME="$ma_home" GH_TOKEN="$(github_token)" bash "$SCRIPT" --only musicai --dry-run 2>&1)"; rc=$?
 check_eq "--only musicai is accepted on a box without it installed" "0" "$rc"
 check_contains "the dry run reaches the end of the step" "stamp version" "$out"
 
-# The step must run before config: configure_taskbar pins music-ai-player.desktop,
-# and a launcher that doesn't exist yet is skipped with a warning, not pinned.
-ma_line="$(grep -n -m1 'wanted musicai' "$SCRIPT" | cut -d: -f1)"
-ma_cfg_line="$(grep -n -m1 'wanted config' "$SCRIPT" | cut -d: -f1)"
-if [[ -n "$ma_line" && -n "$ma_cfg_line" && "$ma_line" -lt "$ma_cfg_line" ]]; then
-    pass "Music AI Player installs before the config step pins the taskbar"
-else
-    fail "Music AI Player installs before the config step" "musicai=$ma_line config=$ma_cfg_line"
-fi
+# The post-install hint fires only when the importer's tools are missing.
+out="$( have() { return 1; }; warn() { echo "WARN: $*"; }; musicai_post_install )"
+check_contains "musicai warns when yt-dlp/ffmpeg are missing" "yt-dlp and/or ffmpeg" "$out"
+out="$( have() { return 0; }; warn() { echo "WARN: $*"; }; musicai_post_install )"
+check_eq "musicai stays quiet when they are present" "" "$out"
 
-ma_release="$(github_api "https://api.github.com/repos/$MUSICAI_REPO/releases/latest" 2>/dev/null)"
-if [[ -z "$ma_release" || "$ma_release" == *'"Not Found"'* ]]; then
-    fail "fetched the latest release" "empty response (rate-limited?)"
-else
-    pass "fetched the latest release"
+group "Prebuilt AppImages: live releases"
 
-    ma_tag="$(printf '%s' "$ma_release" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    ma_url="$(printf '%s' "$ma_release" | grep -o 'https://[^"]*_amd64\.AppImage"' | head -1 | tr -d '"')"
+# Only the contract with the real GitHub releases, which nothing local can prove:
+# the asset is still published under the name the patterns expect, the checksum
+# or signature material exists, and the verify path accepts the real binary.
+live_release() { # repo -> body on 200, nothing otherwise
+    local r; r="$(github_api_raw "https://api.github.com/repos/$1/releases/latest" 2>/dev/null)"
+    [[ "${r##*$'\n'}" == 200 ]] && printf '%s' "${r%$'\n'*}"
+}
+for app in "${APPIMAGE_KEYS[@]}"; do
+    appimage_load "$app"
+    rel="$(live_release "$APP_REPO")"
+    if [[ -z "$rel" ]]; then
+        printf '  %s·%s %s: no published release (or rate-limited) — skipping live checks\n' "$DIM" "$RESET" "$app"
+        continue
+    fi
+    tag="$(release_tag "$rel")"; url="$(release_asset_url "$rel" "$APP_ASSET_RE")"
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "$app: tag parses as a version ($tag)" || fail "$app: tag parses as a version" "$tag"
+    check_contains "$app: asset URL is a GitHub download URL" "github.com" "$url"
+    case "$url" in *.sig|*.zsync|*.deb) fail "$app: asset URL is the AppImage itself" "$url" ;; *) pass "$app: asset URL is the AppImage itself" ;; esac
+    matches="$(printf '%s' "$rel" | grep -o "https://[^\"]*$APP_ASSET_RE\"" | wc -l)"
+    check_eq "$app: exactly one asset URL matches the pattern" "1" "$matches"
+    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"
+    check_eq "$app: asset URL is reachable (HTTP 200)" "200" "$code"
+    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$APP_ICON_URL" 2>/dev/null)"
+    check_eq "$app: icon URL is reachable (HTTP 200)" "200" "$code"
 
-    [[ "$ma_tag" =~ ^v[0-9]+\.[0-9]+ ]] && pass "tag parses as a version ($ma_tag)" \
-                                        || fail "tag parses as a version" "$ma_tag"
-    check_contains "asset URL ends in _amd64.AppImage" "_amd64.AppImage" "$ma_url"
-    check_contains "asset URL is a GitHub download URL" "github.com" "$ma_url"
-
-    if [[ "$ma_url" == *.sig ]]; then
-        fail "asset URL is the AppImage, not the .sig" "$ma_url"
-    else
-        pass "asset URL is the AppImage, not the .sig"
+    case "$APP_VERIFY" in
+    sha256|sums)
+        # The unversioned name is load-bearing: a versioned one breaks the grep
+        # and every re-run's update path.
+        [[ "${url##*/}" =~ -[0-9]+\.[0-9] ]] && fail "$app: asset name carries no version" "$url" || pass "$app: asset name carries no version"
+        d="$(release_asset_digest "$rel" "$APP_ASSET")"
+        [[ "$d" =~ ^[0-9a-f]{64}$ ]] && pass "$app: releases API carries a sha256 digest" || fail "$app: releases API carries a sha256 digest" "got: ${d:-nothing}"
+        ;;
+    esac
+    if [[ "$APP_VERIFY" == sums ]]; then
+        check_contains "$app: release publishes $WOTLK_SUMS" "/$WOTLK_SUMS" "$(release_asset_url "$rel" "/download/[^\"]*/$APP_SUMS")"
+    fi
+    if [[ "$APP_VERIFY" == minisign ]]; then
+        # The key compiled in here must be the one the app ships in its Tauri
+        # config (base64 of the whole minisign key file), or every download fails.
+        branch=main; case "$app" in griddown) branch="$GRIDDOWN_BRANCH" ;; musicai) branch="$MUSICAI_BRANCH" ;; esac
+        conf="$(curl -fsSL "https://raw.githubusercontent.com/$APP_REPO/$branch/src-tauri/tauri.conf.json" 2>/dev/null || true)"
+        ckey="$(printf '%s' "$conf" | grep -m1 '"pubkey"' | cut -d'"' -f4 | base64 -d 2>/dev/null | tail -1 || true)"
+        if [[ -n "$ckey" ]]; then check_eq "$app: embedded pubkey matches the app's tauri.conf.json" "$ckey" "$APP_PUBKEY"
+        else printf '  %s·%s %s: couldn'\''t read tauri.conf.json — skipping the pubkey cross-check\n' "$DIM" "$RESET" "$app"; fi
     fi
 
-    # This release also ships a _amd64.deb (and its own .sig). The pattern must
-    # pick the AppImage out of all four, and pick exactly one — a second match
-    # would make `head -1` the thing deciding what gets installed.
-    if [[ "$ma_url" == *.deb ]]; then
-        fail "asset URL is the AppImage, not the .deb" "$ma_url"
-    else
-        pass "asset URL is the AppImage, not the .deb"
-    fi
-    # `grep -o | wc -l`, not `grep -c`: the API returns the whole release on one
-    # line, and -c counts matching LINES, so it would report 1 for any number of
-    # matches — exactly the case this test exists to catch.
-    ma_matches="$(printf '%s' "$ma_release" | grep -o 'https://[^"]*_amd64\.AppImage"' | wc -l)"
-    check_eq "exactly one asset URL matches the pattern" "1" "$ma_matches"
-
-    code="$(curl -sIL -o /dev/null -w '%{http_code}' "$ma_url" 2>/dev/null)"
-    check_eq "asset URL is reachable (HTTP 200)" "200" "$code"
-fi
-
-# ── Music AI Player signature verification ────────────────────────────────────
-group "Music AI Player signature verification"
-
-if grep -qF 'verify_musicai "$tmp" "$url" ||' "$SCRIPT"; then
-    pass "download is verified before chmod +x"
-else
-    fail "download is verified before chmod +x" "the AppImage would be run unverified"
-fi
-
-if awk '/^verify_musicai\(\)/,/^}/' "$SCRIPT" | grep -q 'return 1'; then
-    pass "an unverifiable signature aborts rather than warning"
-else
-    fail "an unverifiable signature aborts rather than warning"
-fi
-
-# The key is embedded, never pulled off the wire from the host it vouches for.
-if awk '/^verify_musicai\(\)/,/^}/' "$SCRIPT" | grep -qi 'pubkey.*curl\|curl.*pubkey\|tauri.conf'; then
-    fail "public key is embedded, not fetched at runtime"
-else
-    pass "public key is embedded, not fetched at runtime"
-fi
-
-# The pubkey in install.sh must match what the app actually ships in its Tauri
-# config (stored there as base64 of the whole minisign key file). A drift here
-# means every download would fail verification — catch it at test time.
-ma_conf="$(curl -fsSL "https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/tauri.conf.json" 2>/dev/null || true)"
-if [[ -n "$ma_conf" ]]; then
-    ma_conf_key="$(printf '%s' "$ma_conf" | grep -m1 '"pubkey"' | cut -d'"' -f4 | base64 -d 2>/dev/null | tail -1 || true)"
-    if [[ -n "$ma_conf_key" ]]; then
-        check_eq "embedded pubkey matches the app's tauri.conf.json" "$ma_conf_key" "$MUSICAI_PUBKEY"
-    else
-        printf '  %s·%s couldn'\''t decode the pubkey from tauri.conf.json — skipping\n' "$DIM" "$RESET"
-    fi
-else
-    printf '  %s·%s couldn'\''t fetch tauri.conf.json — skipping pubkey cross-check\n' "$DIM" "$RESET"
-fi
-
-# And prove the real release verifies against the embedded key. Tauri v2 signs
-# the AppImage itself here (not a .tar.gz of it), which is what makes verifying
-# the downloaded file directly the right check.
-if have minisign && [[ -n "${ma_tag:-}" && -n "${ma_url:-}" ]]; then
-    mad="$(mktemp -d)"
-    if curl -fsSL "$ma_url" -o "$mad/app.AppImage" 2>/dev/null \
-       && curl -fsSL "$ma_url.sig" 2>/dev/null | base64 -d > "$mad/app.AppImage.minisig" 2>/dev/null; then
-        if minisign -Vm "$mad/app.AppImage" -x "$mad/app.AppImage.minisig" -P "$MUSICAI_PUBKEY" >/dev/null 2>&1; then
-            pass "real release verifies against the embedded public key"
+    # The real binary must pass the installer's own verification — a failure
+    # means a bad release or a broken verify path, and either refuses every install.
+    case "$app" in
+    streamhub|discripper) : ;;   # fetched on a real run; not downloaded here
+    *)
+        dl="$(mktemp -d)"
+        if curl -fsSL "$url" -o "$dl/app.AppImage" 2>/dev/null; then
+            sums_url=""; [[ "$APP_VERIFY" == sums ]] && sums_url="$(release_asset_url "$rel" "/download/[^\"]*/$APP_SUMS")"
+            if appimage_verify "$dl/app.AppImage" "$tag" "$url" "$(release_asset_digest "$rel" "$APP_ASSET")" "$sums_url" >/dev/null 2>&1; then
+                pass "$app: the real release verifies through the installer's own check"
+            else
+                fail "$app: the real release verifies through the installer's own check" "the published binary does not match its published checksum/signature"
+            fi
         else
-            fail "real release verifies against the embedded public key" "minisign rejected it"
+            printf '  %s·%s %s: couldn'\''t download the release — skipping the live verify\n' "$DIM" "$RESET" "$app"
         fi
-    else
-        printf '  %s·%s couldn'\''t download the release — skipping live verify\n' "$DIM" "$RESET"
-    fi
-    rm -rf "$mad"
-else
-    printf '  %s·%s minisign missing or no release — skipping live signature check\n' "$DIM" "$RESET"
-fi
+        rm -rf "$dl"
+        ;;
+    esac
+done
 
-# The icon is fetched off the default branch, which is master here, not main —
-# a wrong branch is a 404 and a launcher with no icon, warned about but installed.
-ma_icon="https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png"
-code="$(curl -sIL -o /dev/null -w '%{http_code}' "$ma_icon" 2>/dev/null)"
-check_eq "icon URL is reachable on the app's default branch (HTTP 200)" "200" "$code"
-
-# ── Music AI Player .desktop file ─────────────────────────────────────────────
-group "Music AI Player .desktop file"
-
-APPS_DIR="$tmp"
-MUSICAI_APPIMAGE="/home/user/.local/bin/MusicAIPlayer.AppImage"
-MUSICAI_DIR="/home/user/.local/share/music-ai-player"
-write_musicai_desktop
-
-# The file NAME is part of the contract, not a style choice: on Wayland the
-# compositor matches the running window to a .desktop named for its app-id,
-# which Tauri takes from the crate name — so this file cannot be renamed to the
-# com.<app>.app form without leaving the running window a generic icon.
-ma_desktop="$tmp/music-ai-player.desktop"
-[[ -f "$ma_desktop" ]] && pass ".desktop file is written, named for the Wayland app-id" \
-                       || fail ".desktop file is written, named for the Wayland app-id"
-ma_content="$(cat "$ma_desktop" 2>/dev/null || true)"
-
-check_contains "has [Desktop Entry] header" "[Desktop Entry]" "$ma_content"
-check_contains "Exec points at the AppImage" "Exec=$MUSICAI_APPIMAGE" "$ma_content"
-check_contains "Icon uses an absolute path"  "Icon=$MUSICAI_DIR/icon.png" "$ma_content"
-check_contains "Type=Application" "Type=Application" "$ma_content"
-check_contains "StartupWMClass matches the Tauri crate name" "StartupWMClass=music-ai-player" "$ma_content"
-
-# The name pinned in taskbar.txt has to be the name actually written, or the
-# taskbar step skips the tile with a warning.
-if grep -qx 'music-ai-player.desktop' <(read_list "$REPO_ROOT/packages/taskbar.txt"); then
-    pass "the pinned launcher name matches the file that gets written"
-else
-    fail "the pinned launcher name matches the file that gets written" \
-         "taskbar.txt pins a name write_musicai_desktop never creates"
-fi
-
-if have desktop-file-validate; then
-    if err="$(desktop-file-validate "$ma_desktop" 2>&1)"; then
-        pass "passes desktop-file-validate"
-    else
-        fail "passes desktop-file-validate" "$err"
-    fi
-else
-    printf '  %s·%s desktop-file-validate not installed — skipping spec validation\n' "$DIM" "$RESET"
+# StreamHub publishes a base64 sha512 (88 characters) in latest-linux.yml.
+sh_rel="$(live_release "$STREAMHUB_REPO")"
+if [[ -n "$sh_rel" ]]; then
+    sha="$(curl -fsSL "https://github.com/$STREAMHUB_REPO/releases/download/$(release_tag "$sh_rel")/latest-linux.yml" 2>/dev/null | grep -m1 '^sha512:' | awk '{print $2}')"
+    [[ ${#sha} -eq 88 ]] && pass "streamhub: release publishes a base64 sha512 we can check against" \
+        || fail "streamhub: release publishes a base64 sha512" "got ${#sha} chars: ${sha:0:20}..."
 fi
 
 # ── the Omarchy step ──────────────────────────────────────────────────────────
@@ -2513,7 +1977,7 @@ mkdir -p "$repair_live"
   STREAMHUB_DIR="$repair_live/data"; STREAMHUB_APPIMAGE="$repair_live/app.AppImage"
   curl() { printf 'icon' > "$3"; }
   refresh_desktop_db() { touch "$repair_live/refreshed"; }
-  repair_app_launcher "$STREAMHUB_DIR" https://example.invalid/icon write_streamhub_desktop
+  repair_app_launcher streamhub
 ) >/dev/null 2>&1
 if [[ -f "$repair_live/apps/com.streamhub.app.desktop" && -f "$repair_live/data/icon.png" \
    && -f "$repair_live/refreshed" ]]; then
@@ -2676,8 +2140,9 @@ check_eq "NAS dry-run changes no files or privileged-command log" "$before" \
 # ── second review pass ────────────────────────────────────────────────────────
 group "Second review pass"
 
-steps_in_script="$(grep -c '^    step "' "$SCRIPT")"
-check_eq "STEP_TOTAL counts every step() call" "$steps_in_script" "$STEP_TOTAL"
+# One step per `wanted` line in main(), plus the preflight.
+steps_in_script="$(( $(grep -c '^    wanted [a-z]* *&& ' "$SCRIPT") + 1 ))"
+check_eq "STEP_TOTAL counts every step main() runs" "$steps_in_script" "$STEP_TOTAL"
 
 # A plugin directory that is a git clone with no origin remote: git exits 2, and
 # under set -e the bare assignment used to end the whole run.
