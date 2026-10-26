@@ -312,7 +312,7 @@ else
     BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; RESET=""
 fi
 STEP_N=0
-STEP_TOTAL=14    # preflight + 13 steps; recalculated below if --only is used
+STEP_TOTAL=13    # preflight + 12 steps; recalculated below if --only is used
 
 step() {
     STEP_N=$((STEP_N + 1))
@@ -604,6 +604,20 @@ with open(path, "w") as f:
 INI
 }
 
+# Edit a config file through a temp copy. The temp lives beside the real file
+# (a symlinked dotfile is followed, so stow/chezmoi setups keep their link), so
+# the final mv is a same-filesystem rename(2) and never leaves a half-written
+# file; mktemp's 0600 is swapped for the original's mode before it lands.
+#
+#   tmp="$(config_tmp "$conf")"; awk ... "$conf" > "$tmp"; config_replace "$tmp" "$conf"
+config_tmp() { mktemp "$(readlink -f -- "$1").XXXXXX"; }
+config_replace() {
+    local tmp="$1" target
+    target="$(readlink -f -- "$2")"
+    chmod --reference="$target" "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$target"
+}
+
 # Collected as the run goes, printed as a report at the end. Steps record what
 # they actually did, not what they intended to do.
 SUMMARY=()
@@ -876,9 +890,13 @@ install_packages() {
     local new_all=() new_wanted=()
     mapfile -t new_all < <(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
 
+    # A set, not grep per package: grep -x reads the name as a regex (libstdc++),
+    # and under pipefail a grep -q that exits early can hand the pipeline a 141.
+    local -A is_new=()
     local p
+    for p in "${new_all[@]}"; do is_new[$p]=1; done
     for p in "${pkgs[@]}"; do
-        printf '%s\n' "${new_all[@]}" | grep -qx "$p" && new_wanted+=("$p")
+        if [[ -n "${is_new[$p]:-}" ]]; then new_wanted+=("$p"); fi
     done
 
     ok "repo packages installed"
@@ -2378,7 +2396,7 @@ smb_ask() {
         report "Network shares" "SKIPPED (smbclient missing)"
         return 1
     }
-    local host user pass reply line name
+    local host user pass reply name kind
     local -a found=() chosen=()
 
     printf '\n   %sNetwork shares%s\n' "$BOLD" "$RESET"
@@ -2394,11 +2412,11 @@ smb_ask() {
 
     # No echo, and read straight from the terminal: the password must not land in
     # the scrollback, and on a curl|bash run stdin is the pipe, not the keyboard.
-    printf '   Password: '
-    stty -echo </dev/tty 2>/dev/null || true
+    # read -s puts the terminal back itself, including on Ctrl-C, where a manual
+    # stty -echo would leave the shell echoing nothing.
     # IFS= so a password with a leading or trailing space is kept as typed.
-    IFS= read -r pass </dev/tty || { stty echo </dev/tty 2>/dev/null || true; return 1; }
-    stty echo </dev/tty 2>/dev/null || true
+    printf '   Password: '
+    IFS= read -rs pass </dev/tty || { printf '\n'; return 1; }
     printf '\n\n'
 
     # Written before the share list is fetched, because fetching it needs these
@@ -2602,6 +2620,10 @@ configure_system() {
     configure_power_profile
     configure_powerdevil
     configure_brave_extensions
+    # Its own step, not a tail of the extensions one: a missing or empty
+    # brave-extensions.txt returns early from that, and the filter lists (and
+    # their dry-run line) would silently go with it.
+    configure_brave_filters
     configure_keepassxc_browser
     configure_taskbar
     configure_network_shares
@@ -2665,8 +2687,6 @@ EOF
     ok "${#ids[@]} Brave extensions set to auto-install on first launch"
     ok "Brave homepage and new tab set to $BRAVE_HOMEPAGE"
     report "Brave" "${#ids[@]} extensions; homepage + new tab -> $BRAVE_HOMEPAGE"
-
-    configure_brave_filters
 }
 
 # Which Brave profile directory to write into.
@@ -2844,7 +2864,13 @@ configure_power_profile() {
         return
     fi
 
-    run powerprofilesctl set "$POWER_PROFILE"
+    # Guarded like the enable above: the daemon can be present but not answering
+    # (masked, or no D-Bus session over SSH), and set -e would end the run here.
+    if ! run powerprofilesctl set "$POWER_PROFILE"; then
+        warn "couldn't set the '$POWER_PROFILE' power profile — is power-profiles-daemon running?"
+        report "Power" "FAILED to set '$POWER_PROFILE'"
+        return
+    fi
 
     # Reapply at every login, since the daemon won't remember it.
     local unit_dir="$HOME/.config/systemd/user"
@@ -3269,7 +3295,7 @@ omarchy_shell_font() {
     if [[ ! -f "$conf" ]]; then
         printf '[font]\nbase-size = %s\n' "$want" > "$conf"
     else
-        local tmp; tmp="$(mktemp)"
+        local tmp; tmp="$(config_tmp "$conf")"
         awk -v val="$want" '
             function emit() { print "base-size = " val; done = 1 }
             /^[[:space:]]*\[/ {
@@ -3283,7 +3309,7 @@ omarchy_shell_font() {
                 if (in_font && !done) emit()
                 else if (!done) { print "[font]"; print "base-size = " val }
             }' "$conf" > "$tmp"
-        mv "$tmp" "$conf"
+        config_replace "$tmp" "$conf"
     fi
 
     OMARCHY_SHELL_DIRTY=1
@@ -3447,7 +3473,9 @@ omarchy_plugins() {
         found=""
         for d in "$HOME"/.config/omarchy/plugins/*/; do
             [[ -d "$d/.git" ]] || continue
-            origin="$(git -C "$d" remote get-url origin 2>/dev/null)"
+            # `|| true`: a clone with no origin remote exits non-zero, and set -e would
+            # end the whole run over a plugin directory that isn't ours to judge.
+            origin="$(git -C "$d" remote get-url origin 2>/dev/null || true)"
             # A plugin installed by hand from its README may carry no .git
             # suffix, or a trailing slash; either is the same repository.
             origin="${origin%/}"; origin="${origin%.git}"
@@ -3674,10 +3702,13 @@ omarchy_bar_layout() {
     CLOCK_FORMAT="$OMARCHY_CLOCK_FORMAT" CLOCK_VERTICAL="$OMARCHY_CLOCK_FORMAT_VERTICAL" \
     EXTRA_RIGHT="$(IFS=,; printf '%s' "${OMARCHY_BAR_RIGHT_EXTRA[*]}")" \
     BAR_MONITORS="$(IFS=,; printf '%s' "${OMARCHY_BAR_MONITORS[*]}")" \
-    python - "$conf" <<'PY'
+    python - "$conf" <<'PY' || { warn "couldn't update $conf (is it valid JSON?) — bar layout left alone"; report "Omarchy bar" "FAILED (couldn't edit shell.json)"; return 0; }
 import json, os, sys
 
-path = sys.argv[1]
+# The shell watches this file, so follow a symlinked dotfile and swap the new
+# contents in with a rename: a plain open(path, "w") truncates first, and the
+# shell can reload a half-written layout.
+path = os.path.realpath(sys.argv[1])
 with open(path) as f:
     data = json.load(f)
 
@@ -3705,7 +3736,7 @@ for section in layout.values():
 # Extra widgets go directly after the tray, matching the real bar. Anything the
 # user has since dragged elsewhere is left where they put it. A third-party
 # widget whose plugin didn't install is left out: an id with nothing behind it.
-plugins_dir = os.path.join(os.path.dirname(path), "plugins")
+plugins_dir = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "plugins")
 def installed(w):
     return w.startswith("omarchy.") or os.path.isdir(os.path.join(plugins_dir, w))
 have_ids = {e.get("id") for e in right}
@@ -3730,9 +3761,12 @@ for entry in center:
 
 # sort_keys matches how omarchy-shell itself serializes this file, so the next
 # widget you drag doesn't produce a diff that is mostly key reordering.
-with open(path, "w") as f:
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
     json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
     f.write("\n")
+os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+os.replace(tmp, path)
 PY
 
     after="$(cat "$conf")"
@@ -3944,7 +3978,7 @@ omarchy_terminal_alpha() {
         return 0
     fi
 
-    local tmp; tmp="$(mktemp)"
+    local tmp; tmp="$(config_tmp "$conf")"
     awk -v val="$FOOT_ALPHA" '
         function emit() { print "alpha=" val; done = 1 }
         /^[[:space:]]*\[/ {
@@ -3964,7 +3998,7 @@ omarchy_terminal_alpha() {
                 print "alpha=" val
             }
         }' "$conf" > "$tmp"
-    mv "$tmp" "$conf"
+    config_replace "$tmp" "$conf"
 
     ok "foot background alpha $FOOT_ALPHA${current:+ (was $current)} — applies to new windows"
     report "Omarchy terminal" "foot alpha $FOOT_ALPHA"
@@ -4024,7 +4058,7 @@ omarchy_mise_quiet() {
     # TOML forbids the same table twice, so an existing [settings] gets the key
     # inserted into it rather than a second section appended after it.
     if grep -qE '^[[:space:]]*\[settings\][[:space:]]*$' "$conf"; then
-        local tmp; tmp="$(mktemp)"
+        local tmp; tmp="$(config_tmp "$conf")"
         awk '
             { print }
             !done && /^[[:space:]]*\[settings\][[:space:]]*$/ {
@@ -4033,7 +4067,7 @@ omarchy_mise_quiet() {
                 print "quiet = true"
                 done = 1
             }' "$conf" > "$tmp"
-        mv "$tmp" "$conf"
+        config_replace "$tmp" "$conf"
     else
         printf '\n[settings]\n# Silences the "mise <config> tools: ..." banner that Omarchy'"'"'s\n# ~/.local/bin wrappers print to STDOUT before every command.\nquiet = true\n' >> "$conf"
     fi

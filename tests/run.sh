@@ -2673,6 +2673,51 @@ check_eq "NAS dry-run completes" 0 "$rc"
 check_eq "NAS dry-run changes no files or privileged-command log" "$before" \
     "$(find "$nas_case" -type f -exec sha256sum {} + | sort)"
 
+# ── second review pass ────────────────────────────────────────────────────────
+group "Second review pass"
+
+steps_in_script="$(grep -c '^    step "' "$SCRIPT")"
+check_eq "STEP_TOTAL counts every step() call" "$steps_in_script" "$STEP_TOTAL"
+
+# A plugin directory that is a git clone with no origin remote: git exits 2, and
+# under set -e the bare assignment used to end the whole run.
+rev_home="$tmp/rev-origin"; mkdir -p "$rev_home/.config/omarchy/plugins/local.one"
+git init -q "$rev_home/.config/omarchy/plugins/local.one"
+out="$( set -euo pipefail
+        HOME="$rev_home"
+        OMARCHY_PLUGINS_GIT=(https://example.invalid/x.git)
+        run() { :; }; omarchy_clone_and_patch() { :; }; pacman() { return 1; }
+        omarchy_plugins >/dev/null 2>&1; echo survived )"
+check_eq "a plugin clone with no origin remote does not abort the run" "survived" "$out"
+
+# config_tmp/config_replace: same mode as the original, and a symlinked dotfile
+# keeps its link while the target behind it is updated.
+rev_cfg="$tmp/rev-cfg"; mkdir -p "$rev_cfg/dots"
+printf 'old\n' > "$rev_cfg/dots/real.conf"; chmod 644 "$rev_cfg/dots/real.conf"
+ln -s "$rev_cfg/dots/real.conf" "$rev_cfg/link.conf"
+t="$(config_tmp "$rev_cfg/link.conf")"; printf 'new\n' > "$t"; config_replace "$t" "$rev_cfg/link.conf"
+check_eq "config_replace keeps a symlinked config a symlink" "yes" "$([[ -L "$rev_cfg/link.conf" ]] && echo yes || echo no)"
+check_eq "config_replace updates the file behind the link" "new" "$(cat "$rev_cfg/dots/real.conf")"
+check_eq "config_replace keeps the original mode, not mktemp's 600" "644" "$(stat -c %a "$rev_cfg/dots/real.conf")"
+check_eq "config_replace leaves no temp file behind" "1" "$(find "$rev_cfg/dots" -type f | wc -l)"
+
+# The shell.toml edit goes through it, so it must not turn 644 into 600 either.
+rev_home="$tmp/rev-font"; mkdir -p "$rev_home/.config/omarchy"
+printf '[font]\nbase-size = 12\n' > "$rev_home/.config/omarchy/shell.toml"; chmod 644 "$rev_home/.config/omarchy/shell.toml"
+( HOME="$rev_home"; DRY_RUN=0; omarchy_shell_font >/dev/null 2>&1 )
+check_contains "omarchy_shell_font rewrites base-size" "base-size = $OMARCHY_SHELL_FONT_PX" "$(cat "$rev_home/.config/omarchy/shell.toml")"
+check_eq "omarchy_shell_font keeps shell.toml's mode" "644" "$(stat -c %a "$rev_home/.config/omarchy/shell.toml")"
+
+# A shell.json that is not valid JSON used to kill the run with a traceback,
+# skipping Hyprland, the terminal and everything after the bar.
+rev_home="$tmp/rev-bar"; mkdir -p "$rev_home/.config/omarchy"
+printf '{not json' > "$rev_home/.config/omarchy/shell.json"
+out="$( set -euo pipefail
+        HOME="$rev_home"; DRY_RUN=0; OMARCHY_SHELL_DIRTY=0
+        omarchy_bar_layout 2>&1; echo "survived rc=$?" )"
+check_contains "an unparsable shell.json is reported, not fatal" "survived rc=0" "$out"
+check_contains "an unparsable shell.json is left alone" "{not json" "$(cat "$rev_home/.config/omarchy/shell.json")"
+
 # ── summary ───────────────────────────────────────────────────────────────────
 printf '\n%s%d passed, %d failed%s\n' "$BOLD" "$PASS" "$FAIL" "$RESET"
 [[ $FAIL -eq 0 ]]
