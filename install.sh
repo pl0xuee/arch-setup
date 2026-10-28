@@ -143,6 +143,20 @@ MUSICAI_BRANCH="master"
 # as the others: a key fetched from the release it vouches for proves nothing.
 MUSICAI_PUBKEY="RWQAo9xTlRVM+fTKa7sSVc0P+nIEuLCEDbEOtfEK10uMzI0sbx7BAO/S"
 
+# Armada is a Tauri desktop app that runs Claude Code, Codex, Grok and ACP agents
+# side by side, each in its own git worktree. Same shape as Music AI Player: the
+# updater is on (latest.json plus a minisign .sig per asset), so it replaces its
+# own AppImage in place, and the versioned asset (Armada_x.y.z_amd64.AppImage) is
+# installed under a stable name. It is a monorepo, so the Tauri project — config,
+# icons — sits under apps/desktop/ rather than at the root.
+ARMADA_DIR="$HOME/.local/share/armada"
+ARMADA_APPIMAGE="$BIN_DIR/Armada.AppImage"
+ARMADA_REPO="pl0xuee/armada"
+ARMADA_TAURI_DIR="apps/desktop/src-tauri"
+# minisign public key from apps/desktop/src-tauri/tauri.conf.json, decoded to the
+# key line `minisign -P` wants — same as GridDown's and Music AI Player's.
+ARMADA_PUBKEY="RWRE4k572FHJv9Z3EO3cfX7UA1+vKF8N+BLyDMk53Pv4ZEer54P/7oMm"
+
 # CPU power profile. power-profiles-daemon forgets this on reboot, so the config
 # step also installs a user service that reapplies it at login.
 POWER_PROFILE="performance"
@@ -312,7 +326,7 @@ else
     BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; RESET=""
 fi
 STEP_N=0
-STEP_TOTAL=13    # preflight + 12 steps; recalculated below if --only is used
+STEP_TOTAL=14    # preflight + 13 steps; recalculated below if --only is used
 
 step() {
     STEP_N=$((STEP_N + 1))
@@ -630,7 +644,7 @@ Options:
   --only STEP     Run one step only:
                     packages | agenttilecli | streamhub | consolevault
                     discripper | griddown | gammagui | lorerim | wotlk
-                    musicai | config | omarchy
+                    musicai | armada | config | omarchy
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
   --desktop D     Force the desktop instead of detecting it:
                     kde | omarchy | other
@@ -673,7 +687,7 @@ while [[ $# -gt 0 ]]; do
         # Guard the arg count first: `shift 2` with only one argument left
         # returns non-zero, and set -e would then exit silently — no usage, no
         # error, nothing. `./install.sh --only` would just print nothing and fail.
-        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy)"
+        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | config | omarchy)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
         # Same arg-count guard as --only, for the same reason: `shift 2` with
@@ -688,8 +702,8 @@ done
 
 if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
-        packages|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|config|omarchy) ;;
-        *) die "--only takes: packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | config | omarchy" ;;
+        packages|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|armada|config|omarchy) ;;
+        *) die "--only takes: packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | config | omarchy" ;;
     esac
 fi
 if [[ -n "$DESKTOP_FORCED" ]]; then
@@ -1119,10 +1133,10 @@ ensure_codex_cli() {
     fi
 }
 
-# ── 3-10. Prebuilt AppImages ──────────────────────────────────────────────────
+# ── 3-11. Prebuilt AppImages ──────────────────────────────────────────────────
 #
 # StreamHub, ConsoleVault, Disc Ripper, GridDown, Stalker GAMMA GUI, LoreRim,
-# WotLK Autoinstall and Music AI Player are all the same job: look up the latest
+# WotLK Autoinstall, Music AI Player and Armada are all the same job: look up the latest
 # GitHub release, download one AppImage under a stable name into ~/.local/bin,
 # verify it BEFORE it is made executable, write a launcher, remember the version.
 # They differ only in data — which asset, how it is verified, what the launcher
@@ -1149,10 +1163,13 @@ ensure_codex_cli() {
 #   APP_SKIP_NO_RELEASE     1 = a 404 means "no release cut yet": warn and move on
 #   APP_DESKTOP ...         the launcher; APP_WMCLASS must equal the window's
 #                           WM_CLASS or the taskbar shows a second, unmatched icon
+#   APP_ACTION_NAME / _ARGS one right-click launcher action, if any: its label
+#                           and the arguments it runs the AppImage with
 #   APP_POST                function run after a fresh install, if any
 appimage_load() {
     APP_KEY="$1"
     APP_ASSET="" APP_PUBKEY="" APP_SUMS="" APP_EXEC_ARGS="" APP_MIME="" APP_POST=""
+    APP_ACTION_NAME="" APP_ACTION_ARGS=""
     APP_UPDATES="" APP_SKIP_NO_RELEASE=0
     local self="it self-updates from here on"
     local noupd="no self-updater — a re-run picks up new releases"
@@ -1269,6 +1286,22 @@ appimage_load() {
         APP_CATEGORIES="AudioVideo;Audio;Player;"
         APP_ICON_URL="https://raw.githubusercontent.com/$MUSICAI_REPO/$MUSICAI_BRANCH/src-tauri/icons/icon.png"
         ;;
+    armada)
+        # armada.desktop for the same Wayland app-id reason as music-ai-player:
+        # the window's class is the binary name, "armada". The New Agent action
+        # rides on the single-instance plugin: a second launch with --new-agent
+        # opens the new-agent screen in the running window.
+        APP_STEP="Armada"; APP_REPORT="Armada"
+        APP_DIR="$ARMADA_DIR"; APP_IMAGE="$ARMADA_APPIMAGE"; APP_REPO="$ARMADA_REPO"
+        APP_ASSET_RE='_amd64\.AppImage'; APP_VERIFY=minisign; APP_PUBKEY="$ARMADA_PUBKEY"
+        APP_UPDATES="$self"; APP_POST=armada_post_install
+        APP_DESKTOP="armada.desktop"; APP_WMCLASS="armada"
+        APP_NAME="Armada"
+        APP_COMMENT="Run Claude Code, Codex and Grok agents side by side"
+        APP_CATEGORIES="Development;"
+        APP_ACTION_NAME="New Agent"; APP_ACTION_ARGS="--new-agent"
+        APP_ICON_URL="https://raw.githubusercontent.com/$ARMADA_REPO/main/$ARMADA_TAURI_DIR/icons/icon.png"
+        ;;
     *)  die "internal error: no AppImage spec for '$1'" ;;
     esac
 }
@@ -1280,6 +1313,19 @@ musicai_post_install() {
     if ! have yt-dlp || ! have ffmpeg; then
         warn "yt-dlp and/or ffmpeg are missing — playback works, but the YouTube importer won't (run this without --only, or: sudo pacman -S --needed yt-dlp ffmpeg)"
     fi
+}
+
+# `armada` on PATH, so a compositor keybinding can run `armada --new-agent` —
+# Armada's own answer to Wayland not letting it grab a global hotkey. A symlink
+# is repointed (a hand install may have left one aimed at another copy); a real
+# file in the way is someone else's and stays.
+armada_post_install() {
+    local link="$BIN_DIR/armada"
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        warn "$link exists and isn't a symlink — left alone, so \`armada\` on PATH may not be this install"
+        return 0
+    fi
+    ln -sfn "$ARMADA_APPIMAGE" "$link"
 }
 
 # Fields out of the release JSON. Each ends in `|| true`: grep exits 1 on no
@@ -1447,6 +1493,7 @@ install_gammagui()     { install_appimage gammagui; }
 install_lorerim()      { install_appimage lorerim; }
 install_wotlk()        { install_appimage wotlk; }
 install_musicai()      { install_appimage musicai; }
+install_armada()       { install_appimage armada; }
 
 # The launcher. The icon is referenced by absolute path rather than a themed
 # name, which sidesteps guessing which hicolor size directory the PNG belongs in.
@@ -1464,6 +1511,13 @@ write_app_desktop() {
         printf 'StartupNotify=true\n'
         printf 'StartupWMClass=%s\n' "$APP_WMCLASS"
         [[ -z "$APP_MIME" ]] || printf 'MimeType=%s\n' "$APP_MIME"
+        if [[ -n "$APP_ACTION_NAME" ]]; then
+            local id="${APP_ACTION_NAME// /}"
+            printf 'Actions=%s;\n' "$id"
+            printf '\n[Desktop Action %s]\n' "$id"
+            printf 'Name=%s\n' "$APP_ACTION_NAME"
+            printf 'Exec=%s %s\n' "$APP_IMAGE" "$APP_ACTION_ARGS"
+        fi
     } > "$APPS_DIR/$APP_DESKTOP"
 }
 
@@ -1543,7 +1597,7 @@ prune_competing_launchers() {
 # is not the same as "verified", and is not a good enough reason to run the
 # binary anyway.
 
-# Tauri apps (ConsoleVault, GridDown, Music AI Player): the release publishes a
+# Tauri apps (ConsoleVault, GridDown, Music AI Player, Armada): the release publishes a
 # minisign signature next to the AppImage (…AppImage.sig), checked against the
 # public key baked into this script — never one fetched from the release it is
 # meant to vouch for.
@@ -1719,7 +1773,7 @@ verify_sha256sums() {
     return 1
 }
 
-# ── 11. system config ─────────────────────────────────────────────────────────
+# ── 12. system config ─────────────────────────────────────────────────────────
 # ── network shares ────────────────────────────────────────────────────────────
 #
 # Mount SMB/CIFS shares at boot, from settings that live on the machine rather
@@ -3527,6 +3581,7 @@ main() {
     wanted lorerim      && install_lorerim
     wanted wotlk        && install_wotlk
     wanted musicai      && install_musicai
+    wanted armada       && install_armada
     wanted config       && configure_system
     wanted omarchy      && configure_omarchy
 
@@ -3570,6 +3625,7 @@ main() {
     printf '    %sLorerimAutoinstall.AppImage%s  one-click LoreRim (Wabbajack) install\n' "$BOLD" "$RESET"
     printf '    %sWowWotlkAutoinstall.AppImage%s  one-click WoW 3.3.5a client install\n' "$BOLD" "$RESET"
     printf '    %sMusicAIPlayer.AppImage%s  music for long coding sessions (YouTube import, ACE-Step)\n' "$BOLD" "$RESET"
+    printf '    %sarmada%s                Claude Code, Codex and Grok agents side by side\n' "$BOLD" "$RESET"
     printf '    %s(or find everything in the app menu)%s\n\n' "$DIM" "$RESET"
 }
 

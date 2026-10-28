@@ -35,7 +35,7 @@ gtksourceview5               # AgentTileCLI: the sidebar's file editor
 nodejs                       # StreamHub (only if building from source)
 npm
 fuse2                        # StreamHub + ConsoleVault: AppImages need libfuse.so.2
-minisign                     # verifies ConsoleVault's + Music AI Player's signed AppImages
+minisign                     # verifies the Tauri apps' signed AppImages (ConsoleVault, Music AI Player, Armada)
 
 # ── Music AI Player ───────────────────────────────────────────────────
 # The player itself bundles everything it needs; these two are for its YouTube
