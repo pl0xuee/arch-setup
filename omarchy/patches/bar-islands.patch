@@ -1,22 +1,22 @@
 --- a/Bar.qml
 +++ b/Bar.qml
-@@ -555,6 +555,15 @@
+@@ -715,6 +715,15 @@
    readonly property bool vertical: position === "left" || position === "right"
    readonly property int barSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
  
 +  // --- island bar ----------------------------------------------------------
-+  // The panel surface is transparent; each section paints its own rounded
-+  // slab instead, so left/center/right read as separate islands. islandPadding
-+  // is the breathing room around a section's content along the bar axis;
-+  // islandInset is the gap between an island and the screen edge across it.
++  // The strip itself stays clear. Each section paints its own rounded slab,
++  // so left, center and right read as separate islands. islandPadding is the
++  // room around a section's content along the bar; islandInset is the gap
++  // between an island and the screen edge across the bar.
 +  property int islandPadding: Style.space(8)
 +  property int islandInset: 3
 +  readonly property int islandThickness: Math.max(1, barSize - islandInset * 2)
 +
-   function normalizePosition(value) {
-     return BarModel.normalizePosition(value)
-   }
-@@ -1193,8 +1202,30 @@
+   // Display cutouts (a camera notch) the platform's own package describes in
+   // the fixed platform root, which no environment variable moves. Most machines
+   // have none. It is read as the shell starts (blockLoading), so a bar surface
+@@ -1669,8 +1678,29 @@
      }
    }
  
@@ -25,8 +25,10 @@
 +  //
 +  //   "bar": { "monitors": ["DP-1"] }
 +  //
-+  // Absent or empty means every screen, which is the stock behaviour. Names are
-+  // the connector names Hyprland uses (`hyprctl monitors` — DP-1, HDMI-A-1).
++  // Absent or empty means every screen. Names are Hyprland connector names
++  // (`hyprctl monitors`). A filter that matches nothing — a monitor unplugged,
++  // a typo — falls back to every screen, because no bar is also no way back
++  // from the bar itself.
 +  readonly property var barScreens: {
 +    var all = Quickshell.screens
 +    var wanted = (barConfig && barConfig.monitors) ? barConfig.monitors : []
@@ -36,9 +38,6 @@
 +    for (var i = 0; i < all.length; i++) {
 +      if (wanted.indexOf(all[i].name) !== -1) out.push(all[i])
 +    }
-+    // A filter that matches nothing — a monitor unplugged, a name typo — would
-+    // otherwise leave no bar on any screen, and no bar is also no way to get it
-+    // back from the bar itself. Fall back to all screens instead.
 +    return out.length > 0 ? out : all
 +  }
 +
@@ -48,18 +47,39 @@
  
      delegate: Component {
        BarPanel {
-@@ -1263,7 +1294,7 @@
+@@ -1682,7 +1712,7 @@
+   }
  
-     implicitWidth: root.vertical ? root.barSize : 0
-     implicitHeight: root.vertical ? 0 : root.barSize
--    color: root.transparent ? "transparent" : root.background
-+    color: "transparent"
-     surfaceFormat.opaque: false
-     WlrLayershell.namespace: "omarchy-bar"
-     WlrLayershell.layer: WlrLayer.Top
-@@ -1355,15 +1386,27 @@
+   Variants {
+-    model: Quickshell.screens
++    model: root.barScreens
  
-         CenterModules { anchors.fill: parent }
+     delegate: Component {
+       DragGhostPanel {
+@@ -1695,7 +1725,7 @@
+   }
+ 
+   Variants {
+-    model: Quickshell.screens
++    model: root.barScreens
+ 
+     delegate: Component {
+       BarMoveGhostPanel {
+@@ -1833,11 +1863,6 @@
+       width: root.vertical ? barWindow.thickness : parent.width
+       height: root.vertical ? parent.height : barWindow.thickness
+ 
+-      Rectangle {
+-        anchors.fill: parent
+-        color: root.transparent ? "transparent" : (root.glassy ? root.glassBackground : root.background)
+-      }
+-
+       Loader {
+         anchors.fill: parent
+         sourceComponent: root.vertical ? verticalBar : horizontalBar
+@@ -1946,20 +1971,31 @@
+           drawn: !barWindow.centerBesideRight
+         }
  
 +        IslandSurface {
 +          contentPos: leftModules.x
@@ -68,6 +88,8 @@
 +
          LeftModules {
 +          id: leftModules
+           window: barWindow
+           pool: horizontalPool
            anchors.left: parent.left
 -          anchors.leftMargin: Style.space(8)
 +          anchors.leftMargin: Style.space(8) + root.islandPadding
@@ -80,16 +102,18 @@
 +        }
 +
          RightModules {
-+          id: rightModules
+           window: barWindow
+           pool: horizontalPool
+           id: rightModules
            anchors.right: parent.right
 -          anchors.rightMargin: Style.space(8)
 +          anchors.rightMargin: Style.space(8) + root.islandPadding
            anchors.verticalCenter: parent.verticalCenter
          }
-       }
-@@ -1377,15 +1420,27 @@
  
-         CenterModules { anchors.fill: parent }
+@@ -1995,19 +2031,31 @@
+           pool: verticalPool
+         }
  
 +        IslandSurface {
 +          contentPos: leftModules.y
@@ -98,6 +122,8 @@
 +
          LeftModules {
 +          id: leftModules
+           window: barWindow
+           pool: verticalPool
            anchors.top: parent.top
 -          anchors.topMargin: Style.space(8)
 +          anchors.topMargin: Style.space(8) + root.islandPadding
@@ -111,174 +137,51 @@
 +
          RightModules {
 +          id: rightModules
+           window: barWindow
+           pool: verticalPool
            anchors.bottom: parent.bottom
 -          anchors.bottomMargin: Style.space(8)
 +          anchors.bottomMargin: Style.space(8) + root.islandPadding
            anchors.horizontalCenter: parent.horizontalCenter
          }
        }
-@@ -1521,6 +1576,22 @@
-     return idx === -1 ? null : entries[idx]
+@@ -2265,6 +2313,25 @@
+     }
    }
  
 +  // Rounded slab behind one section. contentPos/contentExtent describe where
-+  // that section's content sits along the bar axis; the cross-axis geometry is
-+  // the bar minus islandInset on both sides.
++  // that section's content sits along the bar, in this item's parent. Across
++  // the bar the slab is the configured thickness minus islandInset on both
++  // sides, centered in the strip: a notch floor makes the strip taller than
++  // the widgets, and the widgets stay centered in it.
 +  component IslandSurface: Rectangle {
 +    property real contentPos: 0
 +    property real contentExtent: 0
 +
++    z: -1
 +    visible: !root.transparent && contentExtent > 0
-+    color: root.background
++    color: root.glassy ? root.glassBackground : root.background
 +    radius: Math.min(width, height) / 2
-+    x: root.vertical ? root.islandInset : Math.round(contentPos - root.islandPadding)
-+    y: root.vertical ? Math.round(contentPos - root.islandPadding) : root.islandInset
++    x: root.vertical ? Math.round((parent.width - root.islandThickness) / 2) : Math.round(contentPos - root.islandPadding)
++    y: root.vertical ? Math.round(contentPos - root.islandPadding) : Math.round((parent.height - root.islandThickness) / 2)
 +    width: root.vertical ? root.islandThickness : Math.round(contentExtent + root.islandPadding * 2)
 +    height: root.vertical ? Math.round(contentExtent + root.islandPadding * 2) : root.islandThickness
 +  }
 +
    component LeftModules: ModuleList {
-     entries: root.layoutEntries("left")
+     keys: root.layoutWidgets.sections.left
      region: "left"
-@@ -1555,35 +1626,45 @@
-           onHoveredChanged: root.setCenterSectionHovered(hovered)
-         }
- 
--        ModuleList {
--          visible: !centerRoot.hasAnchor
--          entries: centerRoot.entries
--          region: "center"
--          anchors.centerIn: parent
-+        IslandSurface {
-+          contentPos: centerContent.childrenRect.x
-+          contentExtent: centerContent.childrenRect.width
-         }
- 
--        ModuleList {
--          visible: centerRoot.hasAnchor
--          entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
--          region: "center"
--          anchors.right: centerAnchorModule.left
--          anchors.verticalCenter: centerAnchorModule.verticalCenter
--        }
-+        Item {
-+          id: centerContent
-+          anchors.fill: parent
-+
-+          ModuleList {
-+            visible: !centerRoot.hasAnchor
-+            entries: centerRoot.entries
-+            region: "center"
-+            anchors.centerIn: parent
-+          }
- 
--        ModuleSlot {
--          id: centerAnchorModule
--          visible: centerRoot.hasAnchor
--          entry: centerRoot.anchorEntry
--          region: "center"
--          anchors.centerIn: parent
--        }
-+          ModuleList {
-+            visible: centerRoot.hasAnchor
-+            entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
-+            region: "center"
-+            anchors.right: centerAnchorModule.left
-+            anchors.verticalCenter: centerAnchorModule.verticalCenter
-+          }
- 
--        ModuleList {
--          visible: centerRoot.hasAnchor
--          entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
--          region: "center"
--          anchors.left: centerAnchorModule.right
--          anchors.verticalCenter: centerAnchorModule.verticalCenter
-+          ModuleSlot {
-+            id: centerAnchorModule
-+            visible: centerRoot.hasAnchor
-+            entry: centerRoot.anchorEntry
-+            region: "center"
-+            anchors.centerIn: parent
-+          }
-+
-+          ModuleList {
-+            visible: centerRoot.hasAnchor
-+            entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
-+            region: "center"
-+            anchors.left: centerAnchorModule.right
-+            anchors.verticalCenter: centerAnchorModule.verticalCenter
-+          }
-         }
-       }
+@@ -2333,6 +2400,13 @@
+       function onCenterSectionRevealHeldChanged() { sections.syncPeekEdge() }
      }
-@@ -1600,35 +1681,45 @@
-           onHoveredChanged: root.setCenterSectionHovered(hovered)
-         }
  
--        ModuleList {
--          visible: !centerRoot.hasAnchor
--          entries: centerRoot.entries
--          region: "center"
--          anchors.centerIn: parent
-+        IslandSurface {
-+          contentPos: centerContent.childrenRect.y
-+          contentExtent: centerContent.childrenRect.height
-         }
- 
--        ModuleList {
--          visible: centerRoot.hasAnchor
--          entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
--          region: "center"
--          anchors.bottom: centerAnchorModule.top
--          anchors.horizontalCenter: centerAnchorModule.horizontalCenter
--        }
-+        Item {
-+          id: centerContent
-+          anchors.fill: parent
++    IslandSurface {
++      contentPos: root.vertical ? beginList.y : beginList.x
++      contentExtent: root.vertical
++        ? beginList.height + centerBox.height + endList.height
++        : beginList.width + centerBox.width + endList.width
++    }
 +
-+          ModuleList {
-+            visible: !centerRoot.hasAnchor
-+            entries: centerRoot.entries
-+            region: "center"
-+            anchors.centerIn: parent
-+          }
- 
--        ModuleSlot {
--          id: centerAnchorModule
--          visible: centerRoot.hasAnchor
--          entry: centerRoot.anchorEntry
--          region: "center"
--          anchors.centerIn: parent
--        }
-+          ModuleList {
-+            visible: centerRoot.hasAnchor
-+            entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
-+            region: "center"
-+            anchors.bottom: centerAnchorModule.top
-+            anchors.horizontalCenter: centerAnchorModule.horizontalCenter
-+          }
-+
-+          ModuleSlot {
-+            id: centerAnchorModule
-+            visible: centerRoot.hasAnchor
-+            entry: centerRoot.anchorEntry
-+            region: "center"
-+            anchors.centerIn: parent
-+          }
- 
--        ModuleList {
--          visible: centerRoot.hasAnchor
--          entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
--          region: "center"
--          anchors.top: centerAnchorModule.bottom
--          anchors.horizontalCenter: centerAnchorModule.horizontalCenter
-+          ModuleList {
-+            visible: centerRoot.hasAnchor
-+            entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
-+            region: "center"
-+            anchors.top: centerAnchorModule.bottom
-+            anchors.horizontalCenter: centerAnchorModule.horizontalCenter
-+          }
-         }
-       }
-     }
+     ModuleList {
+       id: beginList
+       keys: sections.active ? root.layoutWidgets.sections.centerBegin : []

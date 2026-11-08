@@ -296,12 +296,11 @@ OMARCHY_PLUGINS_GIT=(
 # Which AI agent Omarchy's menu and keybindings launch. Empty leaves it unset.
 OMARCHY_DEFAULT_AGENT=claude
 
-# sha256 of the two upstream files our QML patches were generated against
-# (Omarchy 4.0.3-1). A mismatch doesn't stop the patch being tried — it just
+# sha256 of the upstream Bar.qml the island patch was generated against
+# (Omarchy 4.5.0-3). A mismatch doesn't stop the patch being tried — it just
 # means the warning fires first, so a bar that comes back stock after an
 # `omarchy update` has an obvious explanation in the run log.
-OMARCHY_BAR_BASELINE_SHA=9874c0f36271840b43002890ae333c83097df7f4cff0bade81536a41ed83590b
-OMARCHY_TRAY_BASELINE_SHA=6566c548c76e56315589a126965eb686a6be812b1106d618045fee01a5095dd0
+OMARCHY_BAR_BASELINE_SHA=865998cec3114a395e130e1ff16f92486c3fad8da59400035b95c11522c2b235
 
 SKIP_UPGRADE=0
 DRY_RUN=0
@@ -655,7 +654,7 @@ Steps:
                   are needed for a working setup, so they run by default —
                   there is nothing to do by hand after this script.
   omarchy         The Omarchy desktop: shell text size, bar layout and widgets,
-                  the patched bar/tray plugins, Dropbox, theme and wallpaper, Hyprland
+                  the patched island bar, Dropbox, theme and wallpaper, Hyprland
                   window rules, monitors and input. Skipped on any other
                   desktop.
 
@@ -2599,7 +2598,7 @@ configure_taskbar() {
 #
 #   ~/.config/omarchy/shell.toml    shell text size          (hot-reloaded)
 #   ~/.config/omarchy/shell.json    bar layout and widgets   (hot-reloaded)
-#   ~/.config/omarchy/plugins/      the bar and tray clones, hyprmoncfg, OmaProton VPN
+#   ~/.config/omarchy/plugins/      the island-bar clone, hyprmoncfg, OmaProton VPN
 #   Dropbox                         Omarchy's own service (omarchy-install-service-dropbox)
 #   ~/.config/hypr/                 window rules, input, monitors
 #   ~/.config/foot/foot.ini         terminal font size
@@ -2850,14 +2849,20 @@ omarchy_background() {
     fi
 }
 
-# Shell plugins: the third-party ones from git, then the two first-party ones we
-# carry patches for.
+# Shell plugins: the third-party ones from git, then the first-party bar, which
+# is the one we carry a patch for.
 #
-# The bar and the tray are Omarchy's own code. Editing it in place under
-# /usr/share/omarchy would last until the next `omarchy update`, so both are
-# cloned into ~/.config/omarchy/plugins/ — which is what `omarchy plugin clone`
-# is for — and the clone is patched. The clone id is always
-# <username>.<plugin>, assigned by omarchy-plugin-clone itself.
+# The bar is Omarchy's own code. Editing it in place under /usr/share/omarchy
+# would last until the next `omarchy update`, so it is cloned into
+# ~/.config/omarchy/plugins/ — which is what `omarchy plugin clone` is for —
+# and the clone is patched. The clone id is always <username>.<plugin>,
+# assigned by omarchy-plugin-clone itself.
+#
+# The tray used to be cloned too, to stop a collapsed drawer holding a blank
+# tail open on the island. Omarchy 4.5 sizes that drawer to what is revealed,
+# so the stock tray already does it and a patch against the old file cannot
+# apply. The island bar came back stock on its own: Bar.qml moved, and a patch
+# that does not apply is not selected.
 omarchy_plugins() {
     local url found d origin
 
@@ -2899,9 +2904,6 @@ omarchy_plugins() {
     omarchy_clone_and_patch omarchy.bar  "$REPO_DIR/omarchy/patches/bar-islands.patch" \
         "/usr/share/omarchy/shell/plugins/bar/Bar.qml" "$OMARCHY_BAR_BASELINE_SHA" \
         "island bar"
-    omarchy_clone_and_patch omarchy.tray "$REPO_DIR/omarchy/patches/tray-collapse.patch" \
-        "/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml" "$OMARCHY_TRAY_BASELINE_SHA" \
-        "tray drawer"
 }
 
 # Clone one first-party plugin and apply our patch to it.
@@ -3047,8 +3049,8 @@ omarchy_clone_and_patch() {
     fi
 }
 
-# Bar layout: which widgets sit where, and the two clones taking over from the
-# first-party bar and tray.
+# Bar layout: which widgets sit where, and the island-bar clone taking over
+# from the first-party bar. The tray stays Omarchy's own.
 #
 # shell.json is a plain JSON file the shell watches, so this applies live. It is
 # edited rather than overwritten — the layout is something you also change by
@@ -3058,7 +3060,7 @@ omarchy_bar_layout() {
     local conf="$HOME/.config/omarchy/shell.json"
     local stock="/usr/share/omarchy/config/omarchy/shell.json"
     local bar_id="${USER:-$(id -un)}.bar"
-    local tray_id="${USER:-$(id -un)}.tray"
+    local tray_clone_id="${USER:-$(id -un)}.tray"
 
     if [[ ! -f "$conf" ]]; then
         if [[ $DRY_RUN -eq 1 ]]; then
@@ -3073,23 +3075,21 @@ omarchy_bar_layout() {
     fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
-        run "set bar.id=$bar_id, tray=$tray_id, clock format, extra widgets in $conf"
+        run "set bar.id=$bar_id, clock format, extra widgets in $conf"
         report "Omarchy bar" "would set the bar layout"
         return 0
     fi
 
     # A clone command enables its result before we patch it. Validate the whole
     # patch before keeping that selection, including on subsequent runs.
-    local bar_clone_id="$bar_id" tray_clone_id="$tray_id"
+    local bar_clone_id="$bar_id"
     omarchy_patch_applied "$HOME/.config/omarchy/plugins/$bar_id" \
         "$REPO_DIR/omarchy/patches/bar-islands.patch" || bar_id=""
-    omarchy_patch_applied "$HOME/.config/omarchy/plugins/$tray_id" \
-        "$REPO_DIR/omarchy/patches/tray-collapse.patch" || tray_id=""
 
     local before after
     before="$(cat "$conf")"
 
-    BAR_ID="$bar_id" TRAY_ID="$tray_id" \
+    BAR_ID="$bar_id" \
     BAR_CLONE_ID="$bar_clone_id" TRAY_CLONE_ID="$tray_clone_id" \
     CLOCK_FORMAT="$OMARCHY_CLOCK_FORMAT" CLOCK_VERTICAL="$OMARCHY_CLOCK_FORMAT_VERTICAL" \
     EXTRA_RIGHT="$(IFS=,; printf '%s' "${OMARCHY_BAR_RIGHT_EXTRA[*]}")" \
@@ -3109,7 +3109,7 @@ layout = bar.setdefault("layout", {})
 right = layout.setdefault("right", [])
 center = layout.setdefault("center", [])
 
-bar_id, tray_id = os.environ["BAR_ID"], os.environ["TRAY_ID"]
+bar_id = os.environ["BAR_ID"]
 
 # Fall back only from clones managed by this script; preserve other custom IDs.
 if bar_id:
@@ -3117,13 +3117,15 @@ if bar_id:
 elif bar.get("id") == os.environ["BAR_CLONE_ID"]:
     bar.pop("id", None)
 
-# The user may have moved the tray to another section since installation.
+# Omarchy 4.5's tray already collapses. A previous run may still point the
+# slot at this script's tray clone; put that one back on the stock widget.
+# Any other tray id is the user's and stays where they put it.
 for section in layout.values():
     if not isinstance(section, list):
         continue
     for entry in section:
-        if entry.get("id") in ("omarchy.tray", os.environ["TRAY_CLONE_ID"]):
-            entry["id"] = tray_id or "omarchy.tray"
+        if entry.get("id") == os.environ["TRAY_CLONE_ID"]:
+            entry["id"] = "omarchy.tray"
 
 # Extra widgets go directly after the tray, matching the real bar. Anything the
 # user has since dragged elsewhere is left where they put it. A third-party
@@ -3135,7 +3137,7 @@ have_ids = {e.get("id") for e in right}
 extras = [w for w in os.environ["EXTRA_RIGHT"].split(",")
           if w and w not in have_ids and installed(w)]
 if extras:
-    tray_names = {tray_id, "omarchy.tray"} - {""}
+    tray_names = {"omarchy.tray"}
     at = next((i for i, e in enumerate(right) if e.get("id") in tray_names), -1)
     right[at + 1:at + 1] = [{"id": w} for w in extras]
 
@@ -3210,7 +3212,11 @@ omarchy_hypr() {
     #    Appended, not written: input.lua is also where you'd put a keyboard
     #    layout, and that must survive.
     local input_src="$REPO_DIR/omarchy/hypr/input-accel.lua" input="$hypr/input.lua"
-    if [[ -f "$input_src" && -f "$input" ]] && ! grep -qF 'accel_profile' "$input"; then
+    # Match an active assignment only. Omarchy's input.lua ships accel_profile
+    # inside a commented example, and a fixed-string search treats that comment
+    # as the setting already being there — which is how the pointer stayed
+    # adaptive after every run.
+    if [[ -f "$input_src" && -f "$input" ]] && ! grep -qE '^[[:space:]]*accel_profile[[:space:]]*=' "$input"; then
         if [[ $DRY_RUN -eq 1 ]]; then
             run "append the flat accel_profile block to $input"
         else

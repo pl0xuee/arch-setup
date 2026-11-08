@@ -1509,17 +1509,14 @@ fi
 bj_home="$tmp/bjhome"
 bj_user="${USER:-$(id -un)}"
 mkdir -p "$bj_home/.config/omarchy/plugins/$bj_user.bar" \
-         "$bj_home/.config/omarchy/plugins/$bj_user.tray" \
          "$bj_home/.config/omarchy/plugins/crmne.hyprmoncfg"
-# Synthetic complete patches keep layout tests independent of installed QML.
+# A synthetic complete patch keeps the layout test independent of installed QML.
+# The tray is no longer patched: Omarchy 4.5 already collapses its drawer.
 bj_repo="$tmp/bjrepo"
 mkdir -p "$bj_repo/omarchy/patches"
-for spec in 'bar:Bar.qml:bar-islands' 'tray:Tray.qml:tray-collapse'; do
-    kind="${spec%%:*}"; rest="${spec#*:}"; qml="${rest%%:*}"; pname="${rest#*:}"
-    printf 'patched\n' > "$bj_home/.config/omarchy/plugins/$bj_user.$kind/$qml"
-    printf -- '--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n-stock\n+patched\n' "$qml" "$qml" \
-        > "$bj_repo/omarchy/patches/$pname.patch"
-done
+printf 'patched\n' > "$bj_home/.config/omarchy/plugins/$bj_user.bar/Bar.qml"
+printf -- '--- a/Bar.qml\n+++ b/Bar.qml\n@@ -1 +1 @@\n-stock\n+patched\n' \
+    > "$bj_repo/omarchy/patches/bar-islands.patch"
 cat > "$bj_home/.config/omarchy/shell.json" <<'JSON'
 {
   "version": 1,
@@ -1550,8 +1547,8 @@ print(c[0]['format'] if c else '')
 " 2>/dev/null; }
 
 check_eq "bar.id points at the cloned bar"  "$bj_user.bar" "$(bj_read | sed -n 1p)"
-check_eq "the tray entry is swapped for the clone, in place" \
-         "$bj_user.tray,omarchy.dropbox,crmne.hyprmoncfg,omarchy.power" "$(bj_read | sed -n 2p)"
+check_eq "the stock tray stays, and extras follow it" \
+         "omarchy.tray,omarchy.dropbox,crmne.hyprmoncfg,omarchy.power" "$(bj_read | sed -n 2p)"
 check_eq "the clock format is applied" "ddd d MMM h:mm AP" "$(bj_read | sed -n 3p)"
 # (acme.not-installed is in the extras list too: a third-party widget whose
 # plugin never landed must not be written into the bar as a dangling id.)
@@ -1573,6 +1570,28 @@ bj_once="$(cat "$bj_home/.config/omarchy/shell.json")"
   OMARCHY_BAR_MONITORS=(DP-1)
   REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
 check_eq "a second run changes nothing" "$bj_once" "$(cat "$bj_home/.config/omarchy/shell.json")"
+
+# A layout left over from when the tray was cloned must come back to the stock
+# widget. The clone no longer carries a patch, so leaving the id in place would
+# keep a frozen copy of an old tray on the bar.
+python - "$bj_home/.config/omarchy/shell.json" "$bj_user.tray" <<'PY'
+import json, sys
+p, clone = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+for entry in d["bar"]["layout"]["right"]:
+    if entry.get("id") == "omarchy.tray":
+        entry["id"] = clone
+        break
+json.dump(d, open(p, "w"), indent=2, sort_keys=True)
+open(p, "a").write("\n")
+PY
+( HOME="$bj_home"; DESKTOP=omarchy; DRY_RUN=0
+  OMARCHY_CLOCK_FORMAT="ddd d MMM h:mm AP"; OMARCHY_CLOCK_FORMAT_VERTICAL="h"
+  OMARCHY_BAR_RIGHT_EXTRA=(omarchy.dropbox crmne.hyprmoncfg acme.not-installed)
+  OMARCHY_BAR_MONITORS=(DP-1)
+  REPO_DIR="$bj_repo" omarchy_bar_layout ) >/dev/null 2>&1
+check_eq "a leftover tray clone id is put back on the stock tray" \
+         "omarchy.tray,omarchy.dropbox,crmne.hyprmoncfg,omarchy.power" "$(bj_read | sed -n 2p)"
 
 # Pointing shell.json at a plugin directory that isn't there is how you get a
 # desktop with no bar at all, so the id is only claimed when the clone exists.
@@ -1621,21 +1640,25 @@ else
 fi
 
 # ── the QML patches ───────────────────────────────────────────────────────────
-for p in bar-islands tray-collapse; do
-    if [[ -f "$REPO_ROOT/omarchy/patches/$p.patch" ]]; then
-        pass "omarchy/patches/$p.patch is vendored"
-    else
-        fail "omarchy/patches/$p.patch is vendored" "the step would warn and run stock Omarchy code"
-    fi
-done
+if [[ -f "$REPO_ROOT/omarchy/patches/bar-islands.patch" ]]; then
+    pass "omarchy/patches/bar-islands.patch is vendored"
+else
+    fail "omarchy/patches/bar-islands.patch is vendored" "the step would warn and run the stock bar"
+fi
+# Retired on Omarchy 4.5: the stock tray already collapses. Keeping a patch
+# that cannot apply just warns on every run.
+if [[ -f "$REPO_ROOT/omarchy/patches/tray-collapse.patch" ]]; then
+    fail "the tray-collapse patch stays retired" "it no longer applies, and every run would warn"
+else
+    pass "the tray-collapse patch stays retired"
+fi
 
 # The patches are context diffs against Omarchy's own shell. On a box that has
 # it, check they still apply — this is the early warning that an omarchy update
 # has moved the code out from under them, before a run reports it as a warning
 # and quietly leaves you with a stock bar.
 if have patch && [[ -r /usr/share/omarchy/shell/plugins/bar/Bar.qml ]]; then
-    for pair in "bar-islands:/usr/share/omarchy/shell/plugins/bar/Bar.qml:Bar.qml" \
-                "tray-collapse:/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml:Tray.qml"; do
+    for pair in "bar-islands:/usr/share/omarchy/shell/plugins/bar/Bar.qml:Bar.qml"; do
         pname="${pair%%:*}"; rest="${pair#*:}"; upstream="${rest%%:*}"; fname="${rest##*:}"
         pdir="$(mktemp -d)"; cp "$upstream" "$pdir/$fname"
         if patch -p1 --forward --batch --fuzz=0 --dry-run -s -d "$pdir" < "$REPO_ROOT/omarchy/patches/$pname.patch" >/dev/null 2>&1; then
@@ -1690,6 +1713,26 @@ else
     fail "the dofile line is only appended when it isn't already there" \
          "every run would add another copy to hyprland.lua"
 fi
+
+# Omarchy's input.lua documents accel_profile inside a comment. A search that
+# matches that comment never appends the real setting, so the pointer stays
+# adaptive. Only an uncommented assignment counts.
+accel_home="$tmp/accelhome"
+mkdir -p "$accel_home/.config/hypr"
+cat > "$accel_home/.config/hypr/input.lua" <<'EOF'
+-- Keep only your personal input overrides here.
+-- hl.config({
+--   input = {
+--     accel_profile = "flat",
+--   },
+-- })
+EOF
+( HOME="$accel_home" DRY_RUN=0 HYPRLAND_INSTANCE_SIGNATURE= REPO_DIR="$REPO_ROOT" omarchy_hypr ) >/dev/null 2>&1
+accel_lines="$(grep -cE '^[[:space:]]*accel_profile[[:space:]]*=' "$accel_home/.config/hypr/input.lua" || true)"
+check_eq "a commented accel_profile does not count as set" "1" "$accel_lines"
+( HOME="$accel_home" DRY_RUN=0 HYPRLAND_INSTANCE_SIGNATURE= REPO_DIR="$REPO_ROOT" omarchy_hypr ) >/dev/null 2>&1
+accel_lines="$(grep -cE '^[[:space:]]*accel_profile[[:space:]]*=' "$accel_home/.config/hypr/input.lua" || true)"
+check_eq "a second run does not append accel_profile again" "1" "$accel_lines"
 
 # ── mise's banner ─────────────────────────────────────────────────────────────
 #
@@ -2043,16 +2086,17 @@ check_eq "publishing QML preserves its permissions" 640 "$(stat -c %a "$patch_ca
 omarchy_patch_applied "$patch_case" "$tmp/two-hunks.patch"; rc=$?
 check_eq "the complete patch is recognized on a re-run" 0 "$rc"
 
-# Directory existence is insufficient: invalidate both previously selected
-# clones and check the layout actively falls back, including a moved tray.
+# Directory existence is insufficient: an unpatched bar clone falls back to
+# the stock bar. A tray-clone id left over from the old patch, including one
+# the user has since moved, is renamed to the stock tray and left in place.
 printf 'stock\n' > "$bj_home/.config/omarchy/plugins/$bj_user.bar/Bar.qml"
-printf 'stock\n' > "$bj_home/.config/omarchy/plugins/$bj_user.tray/Tray.qml"
 python - "$bj_home/.config/omarchy/shell.json" "$bj_user" <<'PY'
 import json, sys
 p, user = sys.argv[1:]
 d = json.load(open(p)); layout = d['bar']['layout']
-tray = next(e for e in layout['right'] if e['id'] == user + '.tray')
-layout['right'].remove(tray); layout['left'].append(tray)
+for section in layout.values():
+    section[:] = [e for e in section if e.get('id') not in ('omarchy.tray', user + '.tray')]
+layout['left'].append({'id': user + '.tray'})
 with open(p, 'w') as f: json.dump(d, f)
 PY
 ( HOME="$bj_home"; DRY_RUN=0; REPO_DIR="$bj_repo"
@@ -2060,11 +2104,12 @@ PY
 python - "$bj_home/.config/omarchy/shell.json" "$bj_user" <<'PY'
 import json, sys
 p, user = sys.argv[1:]; d = json.load(open(p))
-assert 'id' not in d['bar']
+assert 'id' not in d['bar'], d['bar'].get('id')
 assert any(e['id'] == 'omarchy.tray' for e in d['bar']['layout']['left'])
 assert all(e['id'] != user + '.tray' for items in d['bar']['layout'].values() for e in items)
+assert all(e['id'] != 'omarchy.tray' for e in d['bar']['layout']['right'])
 PY
-check_eq "unpatched clones fall back to stock bar and moved tray" 0 "$?"
+check_eq "unpatched bar falls back, and a moved tray clone id stays put as stock" 0 "$?"
 
 if printf '%s\n' "${real[@]}" | grep -qx smbclient; then
     pass "the package list includes the share-discovery dependency"
