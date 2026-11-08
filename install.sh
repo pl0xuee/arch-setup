@@ -668,7 +668,7 @@ Steps:
                   there is nothing to do by hand after this script.
   omarchy         The Omarchy desktop: shell text size, bar layout and widgets,
                   the patched island bar, Dropbox, theme and wallpaper, Hyprland
-                  window rules, monitors and input. Skipped on any other
+                  window rules, monitors and flat mouse acceleration. Skipped on any other
                   desktop.
 
 Desktops:
@@ -3252,19 +3252,24 @@ omarchy_hypr() {
     fi
 
     # 3. Mouse acceleration, in input.lua where Omarchy documents input overrides.
-    #    Appended, not written: input.lua is also where you'd put a keyboard
-    #    layout, and that must survive.
+    #    A fresh install ships accel_profile only inside a commented example, and
+    #    a new ~/.config/hypr may not have input.lua yet. Write the flat profile
+    #    in both cases. An uncommented assignment already in the file is the
+    #    user's and stays. Appended, not rewritten: a keyboard layout in the
+    #    same file has to survive.
     local input_src="$REPO_DIR/omarchy/hypr/input-accel.lua" input="$hypr/input.lua"
-    # Match an active assignment only. Omarchy's input.lua ships accel_profile
-    # inside a commented example, and a fixed-string search treats that comment
-    # as the setting already being there — which is how the pointer stayed
-    # adaptive after every run.
-    if [[ -f "$input_src" && -f "$input" ]] && ! grep -qE '^[[:space:]]*accel_profile[[:space:]]*=' "$input"; then
+    if [[ -f "$input_src" ]] && ! { [[ -f "$input" ]] && grep -qE '^[[:space:]]*accel_profile[[:space:]]*=' "$input"; }; then
         if [[ $DRY_RUN -eq 1 ]]; then
-            run "append the flat accel_profile block to $input"
-        else
+            if [[ -f "$input" ]]; then
+                run "append the flat accel_profile block to $input"
+            else
+                run "write the flat accel_profile block to $input"
+            fi
+        elif [[ -f "$input" ]]; then
             printf '\n' >> "$input"
             cat "$input_src" >> "$input"
+        else
+            cp "$input_src" "$input"
         fi
         changed=1
         ok "mouse acceleration off (flat accel profile)"

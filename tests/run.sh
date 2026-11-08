@@ -1762,6 +1762,25 @@ check_eq "a commented accel_profile does not count as set" "1" "$accel_lines"
 accel_lines="$(grep -cE '^[[:space:]]*accel_profile[[:space:]]*=' "$accel_home/.config/hypr/input.lua" || true)"
 check_eq "a second run does not append accel_profile again" "1" "$accel_lines"
 
+# A new machine can have ~/.config/hypr before input.lua has been copied.
+# The flat profile still has to be written, once.
+fresh_home="$tmp/freshaccel"
+mkdir -p "$fresh_home/.config/hypr"
+( HOME="$fresh_home" DRY_RUN=0 HYPRLAND_INSTANCE_SIGNATURE= REPO_DIR="$REPO_ROOT" omarchy_hypr ) >/dev/null 2>&1
+fresh_lines="$(grep -cE '^[[:space:]]*accel_profile[[:space:]]*=' "$fresh_home/.config/hypr/input.lua" || true)"
+check_eq "a new machine with no input.lua still gets flat accel" "1" "$fresh_lines"
+( HOME="$fresh_home" DRY_RUN=0 HYPRLAND_INSTANCE_SIGNATURE= REPO_DIR="$REPO_ROOT" omarchy_hypr ) >/dev/null 2>&1
+fresh_lines="$(grep -cE '^[[:space:]]*accel_profile[[:space:]]*=' "$fresh_home/.config/hypr/input.lua" || true)"
+check_eq "a second run on a new machine does not append accel_profile again" "1" "$fresh_lines"
+dry_home="$tmp/dryaccel"
+mkdir -p "$dry_home/.config/hypr"
+( HOME="$dry_home" DRY_RUN=1 HYPRLAND_INSTANCE_SIGNATURE= REPO_DIR="$REPO_ROOT" omarchy_hypr ) >/dev/null 2>&1
+if [[ -e "$dry_home/.config/hypr/input.lua" ]]; then
+    fail "a dry run does not create input.lua" "the file was written"
+else
+    pass "a dry run does not create input.lua"
+fi
+
 # ── mise's banner ─────────────────────────────────────────────────────────────
 #
 # The setting has to land INSIDE an existing [settings] table: TOML rejects the
