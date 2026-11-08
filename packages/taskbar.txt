@@ -25,3 +25,4 @@ com.lorerim.autoinstall.desktop         # LoreRim Autoinstall
 com.wowwotlk.autoinstall.desktop        # WotLK Autoinstall
 music-ai-player.desktop                 # Music AI Player
 armada.desktop                          # Armada
+kvistcode.desktop                       # Kvistcode

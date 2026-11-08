@@ -565,7 +565,7 @@ fi
 group "Taskbar launcher list"
 
 mapfile -t tb < <(read_list "$REPO_ROOT/packages/taskbar.txt")
-check_eq "taskbar.txt parses to 15 launchers" "15" "${#tb[@]}"
+check_eq "taskbar.txt parses to 16 launchers" "16" "${#tb[@]}"
 
 # Every entry must be a .desktop name — 'applications:' prefixes or bare app
 # names silently produce a dead tile rather than an error.
@@ -582,7 +582,7 @@ fi
 # The order IS the feature — assert it, so a careless edit that reshuffles the
 # list gets caught rather than silently rearranging the taskbar.
 check_eq "launchers are in the intended order" \
-    "brave-origin.desktop vesktop.desktop steam.desktop org.keepassxc.KeePassXC.desktop org.kde.dolphin.desktop dev.agenttilecli.AgentTileCli.desktop com.streamhub.app.desktop com.consolevault.app.desktop com.discripper.app.desktop com.griddown.app.desktop com.stalkergamma.gui.desktop com.lorerim.autoinstall.desktop com.wowwotlk.autoinstall.desktop music-ai-player.desktop armada.desktop" \
+    "brave-origin.desktop vesktop.desktop steam.desktop org.keepassxc.KeePassXC.desktop org.kde.dolphin.desktop dev.agenttilecli.AgentTileCli.desktop com.streamhub.app.desktop com.consolevault.app.desktop com.discripper.app.desktop com.griddown.app.desktop com.stalkergamma.gui.desktop com.lorerim.autoinstall.desktop com.wowwotlk.autoinstall.desktop music-ai-player.desktop armada.desktop kvistcode.desktop" \
     "${tb[*]}"
 
 # ── KDE power settings ────────────────────────────────────────────────────────
@@ -912,11 +912,11 @@ else
 fi
 
 # ── prebuilt AppImages ────────────────────────────────────────────────────────
-# Nine apps share install_appimage(), so they are tested through it: a stubbed
+# Ten apps share install_appimage(), so they are tested through it: a stubbed
 # release and download are pushed through the real install path (under the real
 # `set -euo pipefail`), and the verifiers are run against fixtures, rather than
 # grepping the source for the text of each app's own function.
-APPIMAGE_KEYS=(streamhub consolevault discripper griddown gammagui lorerim wotlk musicai armada)
+APPIMAGE_KEYS=(streamhub consolevault discripper griddown gammagui lorerim wotlk musicai armada kvistcode)
 
 # Stand-in for curl. Serves FAKE_BODY[<url suffix>] (the longest matching suffix
 # wins; the empty suffix is the default), writes to -o's target or stdout, logs
@@ -956,6 +956,7 @@ declare -A AI_ASSET=(
     [wotlk]="$WOTLK_ASSET"
     [musicai]="Music.AI.Player_1.0.0_amd64.AppImage"
     [armada]="Armada_1.0.0_amd64.AppImage"
+    [kvistcode]="Kvistcode_1.0.0_amd64.AppImage"
 )
 declare -A AI_DECOYS=(
     [streamhub]="StreamHub.AppImage.zsync"
@@ -967,6 +968,7 @@ declare -A AI_DECOYS=(
     [wotlk]="$WOTLK_ASSET.zsync"
     [musicai]="Music.AI.Player_1.0.0_amd64.deb Music.AI.Player_1.0.0_amd64.deb.sig Music.AI.Player_1.0.0_amd64.AppImage.sig"
     [armada]="Armada-1.0.0-1.x86_64.rpm Armada_1.0.0_amd64.deb Armada_1.0.0_amd64.AppImage.sig Armada_1.0.0_x64-setup.exe"
+    [kvistcode]="Kvistcode-1.0.0-1.x86_64.rpm Kvistcode_1.0.0_amd64.deb Kvistcode_1.0.0_amd64.AppImage.sig Kvistcode_1.0.0_x64-setup.exe"
 )
 
 PAYLOAD="the payload"
@@ -1024,7 +1026,7 @@ for app in "${APPIMAGE_KEYS[@]}"; do
     appimg_json "$app" "$digest" > "$c/release.json"
     FAKE_BODY=( ["*"]="$PAYLOAD" )
     [[ "$app" == wotlk ]] && FAKE_BODY["/download/v1.0.0/$WOTLK_SUMS"]="$PAYLOAD_SHA  $WOTLK_ASSET"$'\n'
-    stub_verify=""; case "$app" in streamhub|consolevault|discripper|griddown|musicai|armada) stub_verify=0 ;; esac
+    stub_verify=""; case "$app" in streamhub|consolevault|discripper|griddown|musicai|armada|kvistcode) stub_verify=0 ;; esac
 
     # 1. A fresh install ends with a runnable, stamped, launchable app.
     out="$(AI_VERIFY_RC="$stub_verify" appimg_install "$app" "$c" 2>&1)"; rc=$?
@@ -1265,6 +1267,7 @@ declare -A AI_EXPECT_WM=(
     [streamhub]="StreamHub" [consolevault]="ConsoleVault" [discripper]="discripper" [griddown]="griddown"
     [gammagui]="StalkerGamma.Gui" [lorerim]="Lorerim.Gui" [wotlk]="WowWotlk.Gui" [musicai]="music-ai-player"
     [armada]="armada"
+    [kvistcode]="kvistcode"
 )
 for app in "${APPIMAGE_KEYS[@]}"; do
     upper="${app^^}"
@@ -1354,6 +1357,27 @@ out="$( BIN_DIR="$ar/bin"; ARMADA_APPIMAGE="$ar/bin/Armada.AppImage"; warn() { e
 check_eq "armada: a real file named armada is left alone" "mine" "$(cat "$ar/bin/armada")"
 check_contains "armada: and it says so" "isn't a symlink" "$out"
 
+# Kvistcode: same Wayland app-id rule and the same New Agent action, under the
+# binary name rather than the leftover bundle id dev.armada.app.
+[[ -f "$lc/kvistcode.desktop" ]] && pass "kvistcode: named for the Wayland app-id" || fail "kvistcode: named for the Wayland app-id"
+kd="$(cat "$lc/kvistcode.desktop" 2>/dev/null || true)"
+check_contains "kvistcode: declares the New Agent action" "Actions=NewAgent;" "$kd"
+check_contains "kvistcode: defines the New Agent action" "[Desktop Action NewAgent]" "$kd"
+check_contains "kvistcode: New Agent runs the AppImage with --new-agent" "Exec=/home/user/.local/bin/kvistcode.AppImage --new-agent" "$kd"
+if grep -q 'dev.armada.app' "$lc/kvistcode.desktop"; then fail "kvistcode: desktop does not use the bundle id"
+else pass "kvistcode: desktop does not use the bundle id"; fi
+
+kr="$tmp/kvistcode-link"; mkdir -p "$kr/bin"
+( BIN_DIR="$kr/bin"; KVISTCODE_APPIMAGE="$kr/bin/Kvistcode.AppImage"; kvistcode_post_install ) >/dev/null 2>&1
+check_eq "kvistcode: post-install links kvistcode onto PATH" "$kr/bin/Kvistcode.AppImage" "$(readlink "$kr/bin/kvistcode" 2>/dev/null)"
+ln -sfn "$kr/elsewhere/Kvistcode.AppImage" "$kr/bin/kvistcode"
+( BIN_DIR="$kr/bin"; KVISTCODE_APPIMAGE="$kr/bin/Kvistcode.AppImage"; kvistcode_post_install ) >/dev/null 2>&1
+check_eq "kvistcode: a stale symlink is repointed at this install" "$kr/bin/Kvistcode.AppImage" "$(readlink "$kr/bin/kvistcode" 2>/dev/null)"
+rm -f "$kr/bin/kvistcode"; printf 'mine\n' > "$kr/bin/kvistcode"
+out="$( BIN_DIR="$kr/bin"; KVISTCODE_APPIMAGE="$kr/bin/Kvistcode.AppImage"; warn() { echo "WARN: $*"; }; kvistcode_post_install )"
+check_eq "kvistcode: a real file named kvistcode is left alone" "mine" "$(cat "$kr/bin/kvistcode")"
+check_contains "kvistcode: and it says so" "isn't a symlink" "$out"
+
 group "Prebuilt AppImages: live releases"
 
 # Only the contract with the real GitHub releases, which nothing local can prove:
@@ -1397,7 +1421,11 @@ for app in "${APPIMAGE_KEYS[@]}"; do
         # The key compiled in here must be the one the app ships in its Tauri
         # config (base64 of the whole minisign key file), or every download fails.
         branch=main; case "$app" in griddown) branch="$GRIDDOWN_BRANCH" ;; musicai) branch="$MUSICAI_BRANCH" ;; esac
-        tauri_dir=src-tauri; [[ "$app" == armada ]] && tauri_dir="$ARMADA_TAURI_DIR"
+        tauri_dir=src-tauri
+        case "$app" in
+            armada) tauri_dir="$ARMADA_TAURI_DIR" ;;
+            kvistcode) tauri_dir="$KVISTCODE_TAURI_DIR" ;;
+        esac
         conf="$(curl -fsSL "https://raw.githubusercontent.com/$APP_REPO/$branch/$tauri_dir/tauri.conf.json" 2>/dev/null || true)"
         ckey="$(printf '%s' "$conf" | grep -m1 '"pubkey"' | cut -d'"' -f4 | base64 -d 2>/dev/null | tail -1 || true)"
         if [[ -n "$ckey" ]]; then check_eq "$app: embedded pubkey matches the app's tauri.conf.json" "$ckey" "$APP_PUBKEY"
@@ -2001,7 +2029,7 @@ out="$( HOME="$tmp/dbhome-empty"; DRY_RUN=1; FLATPAK_SYSTEM_DIR="$tmp/no-such-di
 check_contains "Dropbox uses Omarchy's own installer" "omarchy-install-service-dropbox" "$out"
 
 # A matching version stamp selects the repair branch, not the download branch.
-# Test all eight callers with both their launcher and icon absent.
+# Test every AppImage caller with both their launcher and icon absent.
 repair_json="$tmp/repair-release.json"
 python - "$repair_json" <<'PY'
 import json, sys
@@ -2009,14 +2037,14 @@ names = ['StreamHub.AppImage', 'ConsoleVault_1_amd64.AppImage',
          'DiscRipper.AppImage', 'GridDown_1_amd64.AppImage',
          'StalkerGammaGui-x86_64.AppImage', 'LorerimAutoinstall-x86_64.AppImage',
          'WowWotlkAutoinstall-x86_64.AppImage', 'Music.AI.Player_1_amd64.AppImage',
-         'Armada_1_amd64.AppImage',
+         'Armada_1_amd64.AppImage', 'Kvistcode_1_amd64.AppImage',
          'SHA256SUMS']
 with open(sys.argv[1], 'w') as f:
     json.dump({'tag_name': 'v1', 'assets': [
         {'name': n, 'browser_download_url': 'https://example.invalid/download/v1/' + n}
         for n in names]}, f, indent=2)
 PY
-for app in streamhub consolevault discripper griddown gammagui lorerim wotlk musicai armada; do
+for app in streamhub consolevault discripper griddown gammagui lorerim wotlk musicai armada kvistcode; do
     repair_case="$tmp/repair-$app"
     mkdir -p "$repair_case/data"
     touch "$repair_case/app.AppImage"

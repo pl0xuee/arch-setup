@@ -157,6 +157,19 @@ ARMADA_TAURI_DIR="apps/desktop/src-tauri"
 # key line `minisign -P` wants — same as GridDown's and Music AI Player's.
 ARMADA_PUBKEY="RWRE4k572FHJv9Z3EO3cfX7UA1+vKF8N+BLyDMk53Pv4ZEer54P/7oMm"
 
+# Kvistcode continued Armada and is published from its own repo. Same shape:
+# updater on (latest.json plus a minisign .sig per asset), so the versioned
+# asset (Kvistcode_x.y.z_amd64.AppImage) is installed under a stable name and
+# replaced in place. The window class is the binary name, kvistcode, not the
+# bundle id, which is still dev.armada.app.
+KVISTCODE_DIR="$HOME/.local/share/kvistcode"
+KVISTCODE_APPIMAGE="$BIN_DIR/Kvistcode.AppImage"
+KVISTCODE_REPO="pl0xuee/kvistcode"
+KVISTCODE_TAURI_DIR="apps/desktop/src-tauri"
+# The key line from apps/desktop/src-tauri/tauri.conf.json. It is the same line
+# Armada ships, read from kvistcode's own config rather than assumed.
+KVISTCODE_PUBKEY="RWRE4k572FHJv9Z3EO3cfX7UA1+vKF8N+BLyDMk53Pv4ZEer54P/7oMm"
+
 # CPU power profile. power-profiles-daemon forgets this on reboot, so the config
 # step also installs a user service that reapplies it at login.
 POWER_PROFILE="performance"
@@ -325,7 +338,7 @@ else
     BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; RESET=""
 fi
 STEP_N=0
-STEP_TOTAL=14    # preflight + 13 steps; recalculated below if --only is used
+STEP_TOTAL=15    # preflight + 14 steps; recalculated below if --only is used
 
 step() {
     STEP_N=$((STEP_N + 1))
@@ -643,7 +656,7 @@ Options:
   --only STEP     Run one step only:
                     packages | agenttilecli | streamhub | consolevault
                     discripper | griddown | gammagui | lorerim | wotlk
-                    musicai | armada | config | omarchy
+                    musicai | armada | kvistcode | config | omarchy
   --skip-upgrade  Don't run 'pacman -Syu' first (not recommended — see below)
   --desktop D     Force the desktop instead of detecting it:
                     kde | omarchy | other
@@ -686,7 +699,7 @@ while [[ $# -gt 0 ]]; do
         # Guard the arg count first: `shift 2` with only one argument left
         # returns non-zero, and set -e would then exit silently — no usage, no
         # error, nothing. `./install.sh --only` would just print nothing and fail.
-        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | config | omarchy)"
+        --only)         [[ $# -ge 2 ]] || die "--only needs a step (packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | kvistcode | config | omarchy)"
                         ONLY="$2"; shift 2 ;;
         --skip-upgrade) SKIP_UPGRADE=1; shift ;;
         # Same arg-count guard as --only, for the same reason: `shift 2` with
@@ -701,8 +714,8 @@ done
 
 if [[ -n "$ONLY" ]]; then
     case "$ONLY" in
-        packages|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|armada|config|omarchy) ;;
-        *) die "--only takes: packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | config | omarchy" ;;
+        packages|agenttilecli|streamhub|consolevault|discripper|griddown|gammagui|lorerim|wotlk|musicai|armada|kvistcode|config|omarchy) ;;
+        *) die "--only takes: packages | agenttilecli | streamhub | consolevault | discripper | griddown | gammagui | lorerim | wotlk | musicai | armada | kvistcode | config | omarchy" ;;
     esac
 fi
 if [[ -n "$DESKTOP_FORCED" ]]; then
@@ -1132,12 +1145,13 @@ ensure_codex_cli() {
     fi
 }
 
-# ── 3-11. Prebuilt AppImages ──────────────────────────────────────────────────
+# ── 3-12. Prebuilt AppImages ──────────────────────────────────────────────────
 #
 # StreamHub, ConsoleVault, Disc Ripper, GridDown, Stalker GAMMA GUI, LoreRim,
-# WotLK Autoinstall, Music AI Player and Armada are all the same job: look up the latest
-# GitHub release, download one AppImage under a stable name into ~/.local/bin,
-# verify it BEFORE it is made executable, write a launcher, remember the version.
+# WotLK Autoinstall, Music AI Player, Armada and Kvistcode are all the same job:
+# look up the latest GitHub release, download one AppImage under a stable name
+# into ~/.local/bin, verify it BEFORE it is made executable, write a launcher,
+# remember the version.
 # They differ only in data — which asset, how it is verified, what the launcher
 # says — so that data lives in appimage_load() and one installer does the rest.
 # The long per-app notes (why a key is hard-coded, what a digest does and doesn't
@@ -1301,6 +1315,23 @@ appimage_load() {
         APP_ACTION_NAME="New Agent"; APP_ACTION_ARGS="--new-agent"
         APP_ICON_URL="https://raw.githubusercontent.com/$ARMADA_REPO/main/$ARMADA_TAURI_DIR/icons/icon.png"
         ;;
+    kvistcode)
+        # kvistcode.desktop for the same Wayland app-id reason as armada: the
+        # window's class is the binary name, "kvistcode", not the identifier
+        # dev.armada.app. The New Agent action rides on the single-instance
+        # plugin: a second launch with --new-agent opens the new-agent screen
+        # in the running window.
+        APP_STEP="Kvistcode"; APP_REPORT="Kvistcode"
+        APP_DIR="$KVISTCODE_DIR"; APP_IMAGE="$KVISTCODE_APPIMAGE"; APP_REPO="$KVISTCODE_REPO"
+        APP_ASSET_RE='_amd64\.AppImage'; APP_VERIFY=minisign; APP_PUBKEY="$KVISTCODE_PUBKEY"
+        APP_UPDATES="$self"; APP_POST=kvistcode_post_install
+        APP_DESKTOP="kvistcode.desktop"; APP_WMCLASS="kvistcode"
+        APP_NAME="Kvistcode"
+        APP_COMMENT="Run Claude, Codex, Grok, local and ACP agents side by side"
+        APP_CATEGORIES="Development;"
+        APP_ACTION_NAME="New Agent"; APP_ACTION_ARGS="--new-agent"
+        APP_ICON_URL="https://raw.githubusercontent.com/$KVISTCODE_REPO/main/$KVISTCODE_TAURI_DIR/icons/icon.png"
+        ;;
     *)  die "internal error: no AppImage spec for '$1'" ;;
     esac
 }
@@ -1325,6 +1356,17 @@ armada_post_install() {
         return 0
     fi
     ln -sfn "$ARMADA_APPIMAGE" "$link"
+}
+
+# `kvistcode` on PATH, for the same reason as armada: a compositor keybinding
+# runs `kvistcode --new-agent`. A symlink is repointed; a real file stays.
+kvistcode_post_install() {
+    local link="$BIN_DIR/kvistcode"
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        warn "$link exists and isn't a symlink — left alone, so \`kvistcode\` on PATH may not be this install"
+        return 0
+    fi
+    ln -sfn "$KVISTCODE_APPIMAGE" "$link"
 }
 
 # Fields out of the release JSON. Each ends in `|| true`: grep exits 1 on no
@@ -1493,6 +1535,7 @@ install_lorerim()      { install_appimage lorerim; }
 install_wotlk()        { install_appimage wotlk; }
 install_musicai()      { install_appimage musicai; }
 install_armada()       { install_appimage armada; }
+install_kvistcode()    { install_appimage kvistcode; }
 
 # The launcher. The icon is referenced by absolute path rather than a themed
 # name, which sidesteps guessing which hicolor size directory the PNG belongs in.
@@ -1596,10 +1639,10 @@ prune_competing_launchers() {
 # is not the same as "verified", and is not a good enough reason to run the
 # binary anyway.
 
-# Tauri apps (ConsoleVault, GridDown, Music AI Player, Armada): the release publishes a
-# minisign signature next to the AppImage (…AppImage.sig), checked against the
-# public key baked into this script — never one fetched from the release it is
-# meant to vouch for.
+# Tauri apps (ConsoleVault, GridDown, Music AI Player, Armada, Kvistcode): the
+# release publishes a minisign signature next to the AppImage (…AppImage.sig),
+# checked against the public key baked into this script — never one fetched
+# from the release it is meant to vouch for.
 verify_minisign() {
     local file="$1" url="$2" pubkey="$3"
 
@@ -1772,7 +1815,7 @@ verify_sha256sums() {
     return 1
 }
 
-# ── 12. system config ─────────────────────────────────────────────────────────
+# ── 13. system config ─────────────────────────────────────────────────────────
 # ── network shares ────────────────────────────────────────────────────────────
 #
 # Mount SMB/CIFS shares at boot, from settings that live on the machine rather
@@ -3588,6 +3631,7 @@ main() {
     wanted wotlk        && install_wotlk
     wanted musicai      && install_musicai
     wanted armada       && install_armada
+    wanted kvistcode    && install_kvistcode
     wanted config       && configure_system
     wanted omarchy      && configure_omarchy
 
@@ -3632,6 +3676,7 @@ main() {
     printf '    %sWowWotlkAutoinstall.AppImage%s  one-click WoW 3.3.5a client install\n' "$BOLD" "$RESET"
     printf '    %sMusicAIPlayer.AppImage%s  music for long coding sessions (YouTube import, ACE-Step)\n' "$BOLD" "$RESET"
     printf '    %sarmada%s                Claude Code, Codex and Grok agents side by side\n' "$BOLD" "$RESET"
+    printf '    %skvistcode%s             Claude, Codex, Grok, local and ACP agents side by side\n' "$BOLD" "$RESET"
     printf '    %s(or find everything in the app menu)%s\n\n' "$DIM" "$RESET"
 }
 
