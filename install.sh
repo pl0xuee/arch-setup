@@ -293,7 +293,7 @@ OMARCHY_BAR_MONITORS=(
 
 # Bar widgets added to the right section, in order, directly after the tray.
 OMARCHY_BAR_RIGHT_EXTRA=(
-    io.github.grichard99.omaproton-vpn  # Proton VPN panel (the plugin below)
+    pl0xuee.proton-for-omarchy  # Proton VPN panel (the plugin below)
     omarchy.dropbox         # Omarchy's own Dropbox service, installed below
     crmne.hyprmoncfg        # multi-monitor layout switcher (the plugin below)
 )
@@ -303,7 +303,15 @@ OMARCHY_BAR_RIGHT_EXTRA=(
 # order, so the bar-layout step places them instead, in the order listed above.
 OMARCHY_PLUGINS_GIT=(
     https://github.com/crmne/omarchy-hyprmoncfg.git
-    https://github.com/grichard99/omaproton-vpn.git
+    https://github.com/pl0xuee/proton-for-omarchy.git
+)
+
+# Plugins an earlier run installed and this list has since replaced, as
+# <old id>:<replacement id>. The old one is removed with `omarchy plugin remove`
+# only once its replacement is installed, so a failed add never leaves you with
+# neither; its widget leaves the bar layout once the plugin is actually gone.
+OMARCHY_PLUGINS_RETIRED=(
+    io.github.grichard99.omaproton-vpn:pl0xuee.proton-for-omarchy
 )
 
 # Which AI agent Omarchy's menu and keybindings launch. Empty leaves it unset.
@@ -793,7 +801,15 @@ preflight() {
 
 # Runs however the script ends, including a crash.
 cleanup() {
-    [[ -n "${SUDO_KEEPALIVE:-}" ]] && kill "$SUDO_KEEPALIVE" 2>/dev/null
+    # The loop's sleep is its own process and outlives a killed loop. Note it
+    # first, stop the loop so it can't start another, then take the sleep.
+    if [[ -n "${SUDO_KEEPALIVE:-}" ]]; then
+        local kids
+        kids="$(pgrep -P "$SUDO_KEEPALIVE" 2>/dev/null || true)"
+        kill "$SUDO_KEEPALIVE" 2>/dev/null || true
+        # shellcheck disable=SC2086  # one pid per word
+        [[ -n "$kids" ]] && kill $kids 2>/dev/null || true
+    fi
 
     # The taskbar step stops plasmashell so it can't overwrite the config we're
     # writing. If anything failed in between, the user is staring at a desktop
@@ -974,8 +990,13 @@ install_agenttilecli() {
     # prompt it grows later can ever hang an unattended install.
     if [[ $DRY_RUN -eq 1 ]]; then
         run "(cd $dir && ./install.sh)"
-    else
-        ( cd "$dir" && ./install.sh < /dev/null )
+    elif ! ( cd "$dir" && ./install.sh < /dev/null ); then
+        # A failed build is this tool's problem, not the run's: the steps after
+        # it don't depend on it, so warn and carry on rather than let set -e end
+        # everything here.
+        warn "AgentTileCLI build failed — see the output above"
+        report "AgentTileCLI" "FAILED (build)"
+        return 0
     fi
     ok "AgentTileCLI installed to $BIN_DIR/agenttilecli"
 
@@ -1478,6 +1499,10 @@ install_appimage() {
         # missing or stale, and a stray can sit beside a perfectly good one.
         prune_competing_launchers "$APP_DESKTOP"
 
+        # The post hooks are idempotent and repair what they own (a PATH symlink
+        # deleted or aimed elsewhere), so they run on a matching stamp too.
+        if [[ -n "$APP_POST" && $DRY_RUN -eq 0 ]]; then "$APP_POST"; fi
+
         report "$APP_REPORT" "$tag already installed"
         return
     fi
@@ -1948,7 +1973,9 @@ configure_network_shares() {
             return 0
         fi
         # A prompt nobody can answer is a hang, not a question.
-        if [[ ! -t 0 && ! -r /dev/tty ]]; then
+        # -r /dev/tty is no test: the node is mode 666 even with no controlling
+        # terminal, so actually open it.
+        if [[ ! -t 0 ]] && ! { : </dev/tty; } 2>/dev/null; then
             info "  no $SMB_CONFIG and no terminal to ask on — network shares skipped"
             report "Network shares" "SKIPPED (not configured, no terminal)"
             return 0
@@ -2291,7 +2318,11 @@ configure_power_profile() {
     # Not every machine offers every profile: it depends on the CPU's scaling
     # driver. A VM typically has no 'performance' at all. Setting a profile that
     # doesn't exist is an error, so check before asking for it.
-    if ! powerprofilesctl list 2>/dev/null | grep -q "$POWER_PROFILE"; then
+    # Captured, not piped into grep -q: under pipefail an early grep exit can
+    # SIGPIPE the writer and fail the whole test.
+    local profiles
+    profiles="$(powerprofilesctl list 2>/dev/null || true)"
+    if ! grep -qE "^\*?[[:space:]]*${POWER_PROFILE}:" <<<"$profiles"; then
         warn "'$POWER_PROFILE' profile isn't available on this machine (no scaling driver? a VM?)"
         warn "available: $(powerprofilesctl list 2>/dev/null | grep -oE '^\*?[[:space:]]*[a-z-]+:' | tr -d '*: ' | tr '\n' ' ')"
         report "Power" "SKIPPED ('$POWER_PROFILE' unavailable here)"
@@ -2641,7 +2672,7 @@ configure_taskbar() {
 #
 #   ~/.config/omarchy/shell.toml    shell text size          (hot-reloaded)
 #   ~/.config/omarchy/shell.json    bar layout and widgets   (hot-reloaded)
-#   ~/.config/omarchy/plugins/      the island-bar clone, hyprmoncfg, OmaProton VPN
+#   ~/.config/omarchy/plugins/      the island-bar clone, hyprmoncfg, Proton for Omarchy
 #   Dropbox                         Omarchy's own service (omarchy-install-service-dropbox)
 #   ~/.config/hypr/                 window rules, input, monitors
 #   ~/.config/foot/foot.ini         terminal font size
@@ -2937,12 +2968,23 @@ omarchy_plugins() {
         fi
     done
 
-    # The OmaProton VPN widget drives the Proton CLI, and the Proton desktop app
-    # can't hold a connection at the same time. Removing it is left to you.
-    if have pacman && pacman -Q proton-vpn-gtk-app >/dev/null 2>&1; then
-        warn "proton-vpn-gtk-app is still installed and conflicts with the OmaProton VPN widget — remove it with: sudo pacman -Rns proton-vpn-gtk-app"
-        report "Omarchy plugins" "proton-vpn-gtk-app still installed (conflicts with OmaProton VPN)"
-    fi
+    local pair id
+    for pair in "${OMARCHY_PLUGINS_RETIRED[@]}"; do
+        id="${pair%%:*}"
+        # -L as well: a dangling symlinked plugin is still one to remove.
+        [[ -e "$HOME/.config/omarchy/plugins/$id" || -L "$HOME/.config/omarchy/plugins/$id" ]] || continue
+        if [[ ! -d "$HOME/.config/omarchy/plugins/${pair#*:}" ]]; then
+            warn "keeping $id until its replacement ${pair#*:} installs"
+            continue
+        fi
+        if run omarchy plugin remove "$id" --yes; then
+            ok "removed retired plugin $id"
+            report "Omarchy plugins" "removed $id"
+            OMARCHY_SHELL_DIRTY=1
+        else
+            warn "couldn't remove the retired shell plugin $id"
+        fi
+    done
 
     omarchy_clone_and_patch omarchy.bar  "$REPO_DIR/omarchy/patches/bar-islands.patch" \
         "/usr/share/omarchy/shell/plugins/bar/Bar.qml" "$OMARCHY_BAR_BASELINE_SHA" \
@@ -3136,6 +3178,7 @@ omarchy_bar_layout() {
     BAR_CLONE_ID="$bar_clone_id" TRAY_CLONE_ID="$tray_clone_id" \
     CLOCK_FORMAT="$OMARCHY_CLOCK_FORMAT" CLOCK_VERTICAL="$OMARCHY_CLOCK_FORMAT_VERTICAL" \
     EXTRA_RIGHT="$(IFS=,; printf '%s' "${OMARCHY_BAR_RIGHT_EXTRA[*]}")" \
+    RETIRED="$(IFS=,; printf '%s' "${OMARCHY_PLUGINS_RETIRED[*]}")" \
     BAR_MONITORS="$(IFS=,; printf '%s' "${OMARCHY_BAR_MONITORS[*]}")" \
     python - "$conf" <<'PY' || { warn "couldn't update $conf (is it valid JSON?) — bar layout left alone"; report "Omarchy bar" "FAILED (couldn't edit shell.json)"; return 0; }
 import json, os, sys
@@ -3170,10 +3213,19 @@ for section in layout.values():
         if entry.get("id") == os.environ["TRAY_CLONE_ID"]:
             entry["id"] = "omarchy.tray"
 
+# Widgets of retired plugins, once the plugin itself is gone (its removal can
+# fail, e.g. with the shell not running, and then the widget stays put).
+plugins_dir = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "plugins")
+retired = {p.split(":")[0] for p in os.environ["RETIRED"].split(",") if p}
+retired = {w for w in retired if not os.path.lexists(os.path.join(plugins_dir, w))}
+for name, section in layout.items():
+    if isinstance(section, list):
+        layout[name] = [e for e in section if e.get("id") not in retired]
+right, center = layout["right"], layout["center"]
+
 # Extra widgets go directly after the tray, matching the real bar. Anything the
 # user has since dragged elsewhere is left where they put it. A third-party
 # widget whose plugin didn't install is left out: an id with nothing behind it.
-plugins_dir = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "plugins")
 def installed(w):
     return w.startswith("omarchy.") or os.path.isdir(os.path.join(plugins_dir, w))
 have_ids = {e.get("id") for e in right}

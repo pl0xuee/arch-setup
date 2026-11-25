@@ -51,7 +51,7 @@ What that changes:
 | Taskbar launchers, panel height, tray | ✅ | skipped — omarchy-shell has no pinned launchers |
 | Powerdevil idle settings | ✅ | skipped — Omarchy idles through its own shell |
 | `kscreen`, `qt6-imageformats` | ✅ | skipped — Plasma-only |
-| Dropbox, OmaProton VPN and `proton-vpn-cli` | skipped — Omarchy-only | ✅ — Omarchy's own Dropbox service and a shell plugin |
+| Dropbox, Proton for Omarchy and `proton-vpn-cli` | skipped — Omarchy-only | ✅ — Omarchy's own Dropbox service and a shell plugin |
 | Bar, theme, wallpaper, Hyprland rules, monitors | skipped — no omarchy-shell | ✅ — see [The Omarchy desktop](#the-omarchy-desktop) |
 | Brave Origin and Vesktop | ✅ — native CachyOS repos | ✅ — yay or paru |
 | CachyOS gaming packages | ✅ — on native CachyOS | skipped — Omarchy defaults |
@@ -91,10 +91,10 @@ by piece. What it sets:
 | | |
 |---|---|
 | **Shell text size** | `[font] base-size` in `~/.config/omarchy/shell.toml` — 16px against Omarchy's 12, and the bar's height scales from it. Written directly rather than through `omarchy display text size`, which would drag GTK's text scaling and every terminal font along with it. |
-| **Bar layout** | Clock format, plus OmaProton VPN, Dropbox and hyprmoncfg in the right section. `shell.json` is edited, never overwritten, so widgets you drag around the bar afterwards survive a re-run. |
+| **Bar layout** | Clock format, plus Proton for Omarchy, Dropbox and hyprmoncfg in the right section. `shell.json` is edited, never overwritten, so widgets you drag around the bar afterwards survive a re-run. |
 | **One bar, one monitor** | Stock Omarchy puts a bar on every screen — `Variants { model: Quickshell.screens }`, with no option to narrow it. The patched clone reads `bar.monitors` from shell.json, so the bar lands on the ultrawide alone. A name that matches nothing falls back to every screen, so a box with different displays gets a bar rather than none. |
 | **Island bar** | `omarchy.bar` cloned to `<user>.bar` and patched: the panel surface goes transparent and each of the three sections paints its own rounded slab, so the bar reads as three islands instead of one edge-to-edge strip. |
-| **Tray drawer** | `omarchy.tray` cloned to `<user>.tray` and patched so the collapsed drawer stops holding width open for its hidden icons — otherwise the right island always carries a blank tail. |
+| **Tray drawer** | Stock. Omarchy 4.5's tray already sizes its collapsed drawer to what is revealed; a `<user>.tray` clone from an earlier run is pointed back at `omarchy.tray` in the layout. |
 | **Theme and wallpaper** | The `nebula` theme — vendored in `omarchy/themes/nebula/`, not one of Omarchy's — installed into `~/.config/omarchy/themes/` and then applied, with its wallpaper selected. Its palette is sampled off that wallpaper, and it carries its own `hyprland.lua`, so windows get 14px rounded corners and a cyan-to-coral gradient border. Any wallpapers in `omarchy/backgrounds/<theme>/` are installed alongside. |
 | **Hyprland** | Window rules (Steam tiles, StreamHub stays opaque), background blur so the transparent terminal reads over a busy wallpaper — Omarchy ships blur off — the session PATH fix that keeps `~/.local/bin` ahead of `/usr/bin`, flat mouse acceleration, and this machine's monitor layout. |
 | **X11 app scale** | `GDK_SCALE=1`, over the 2 Omarchy sets for the HiDPI laptop its default is written for. The variable reaches XWayland clients only — Wayland apps take their scale from the compositor — and at 2 every X11 client drew at twice the size it asked for, the Tauri AppImages above worst of all, since their packaging forces them onto X11. Exact on a monitor at scale 1 and 20% small on one at 1.25; GTK on X11 has no fractional step in between. Pushed into the running session as well as the config, so it applies without a re-login. |
@@ -111,8 +111,8 @@ line pointing at it, added only if it isn't already there.
 
 ### Patching Omarchy's own code
 
-The bar and the tray are Omarchy's, and `/usr/share/omarchy` is overwritten by
-`omarchy update`. So both are cloned into `~/.config/omarchy/plugins/` — what
+The bar is Omarchy's, and `/usr/share/omarchy` is overwritten by
+`omarchy update`. So it is cloned into `~/.config/omarchy/plugins/` — what
 `omarchy plugin clone` is for — and the clone is patched with the diffs in
 `omarchy/patches/`.
 
@@ -187,7 +187,7 @@ does not remove unrelated entries. Delete `smb.conf` to be asked again.
 | `packages/pacman-omarchy.txt` | packages only worth having on Omarchy |
 | `packages/taskbar.txt` | pinned launchers, in order (KDE only) |
 | `packages/brave-extensions.txt` | extensions to auto-install |
-| `omarchy/patches/` | diffs applied to the cloned Omarchy bar and tray plugins |
+| `omarchy/patches/` | diff applied to the cloned Omarchy bar plugin |
 | `omarchy/hypr/` | window rules, input and monitor layout, installed into `~/.config/hypr/` |
 | `omarchy/themes/<theme>/` | custom themes installed into `~/.config/omarchy/themes/`, applied by name |
 | `omarchy/backgrounds/<theme>/` | extra wallpapers installed into that theme's user folder |

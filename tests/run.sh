@@ -119,7 +119,7 @@ fi
 mapfile -t om < <(read_list "$REPO_ROOT/packages/pacman-omarchy.txt")
 check_eq "pacman-omarchy.txt parses to the Proton CLI" "proton-vpn-cli" "${om[*]}"
 if printf '%s\n' "${real[@]}" | grep -qx 'proton-vpn-gtk-app\|proton-vpn-cli'; then
-    fail "no Proton client is in the shared list" "it belongs to Omarchy's OmaProton widget only"
+    fail "no Proton client is in the shared list" "it belongs to the Omarchy-only Proton for Omarchy widget"
 else
     pass "no Proton client is in the shared list"
 fi
